@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NEXORA Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px;
+    }
+
+    h1 {
+      margin-bottom: 20px;
+    }
+
+    #chat {
+      width: 400px;
+      min-height: 300px;
+      background: #1e293b;
+      padding: 15px;
+      border-radius: 10px;
+      overflow-y: auto;
+      margin-bottom: 15px;
+    }
+
+    .user {
+      color: #38bdf8;
+      margin-bottom: 10px;
+    }
+
+    .bot {
+      color: #22c55e;
+      margin-bottom: 15px;
+    }
+
+    input {
+      width: 300px;
+      padding: 10px;
+      border-radius: 5px;
+      border: none;
+    }
+
+    button {
+      padding: 10px 15px;
+      border: none;
+      border-radius: 5px;
+      background: #22c55e;
+      color: white;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🚀 NEXORA Demo</h1>
+
+  <div id="chat"></div>
+
+  <div>
+    <input type="text" id="mensaje" placeholder="Escribí tu pregunta..." />
+    <button onclick="enviar()">Enviar</button>
+  </div>
+
+  <script>
+    async function enviar() {
+      const input = document.getElementById("mensaje");
+      const chat = document.getElementById("chat");
+      const texto = input.value;
+
+      if (!texto) return;
+
+      chat.innerHTML += `<div class="user">👤 ${texto}</div>`;
+      input.value = "";
+
+      const response = await fetch("http://localhost:3000/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ mensaje: texto })
+      });
+
+      const data = await response.json();
+
+      chat.innerHTML += `<div class="bot">🤖 ${data.respuesta}</div>`;
+      chat.scrollTop = chat.scrollHeight;
+    }
+  </script>
+
+</body>
+</html>
