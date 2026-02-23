@@ -41,10 +41,9 @@ app.get("/webhook", (req, res) => {
 // ===============================
 // 📩 RECEPCIÓN DE MENSAJES WHATSAPP
 // ===============================
-app.post("/webhook", async (req, res) => {
-  console.log("Mensaje recibido:");
-  console.log(JSON.stringify(req.body, null, 2));
+const axios = require("axios");
 
+app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
 
@@ -54,12 +53,13 @@ app.post("/webhook", async (req, res) => {
       body.entry[0].changes &&
       body.entry[0].changes[0].value.messages
     ) {
-      const mensaje =
-        body.entry[0].changes[0].value.messages[0].text.body;
+      const messageData = body.entry[0].changes[0].value.messages[0];
+      const from = messageData.from;
+      const mensaje = messageData.text.body;
 
-      console.log("Mensaje del usuario:", mensaje);
+      console.log("Mensaje recibido:", mensaje);
 
-      // 🔥 Llamada a OpenAI
+      // 🔥 Generar respuesta con OpenAI
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -75,13 +75,30 @@ app.post("/webhook", async (req, res) => {
         ],
       });
 
-      console.log("Respuesta IA:", response.choices[0].message.content);
+      const respuestaIA = response.choices[0].message.content;
+
+      console.log("Respuesta IA:", respuestaIA);
+
+      // 📲 Enviar respuesta a WhatsApp
+      await axios.post(
+        `https://graph.facebook.com/v19.0/1000050743190036/messages`,
+        {
+          messaging_product: "whatsapp",
+          to: from,
+          text: { body: respuestaIA }
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
     }
 
     res.sendStatus(200);
-
   } catch (error) {
-    console.error("Error procesando mensaje:", error);
+    console.error("Error enviando mensaje:", error.response?.data || error);
     res.sendStatus(500);
   }
 });
