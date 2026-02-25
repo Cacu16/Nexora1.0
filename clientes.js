@@ -1,9 +1,5 @@
  const clientes = {
-  // ⚠️ IMPORTANTE:
-  // Reemplazá ESTE ID por el phone_number_id REAL
-  // que te muestra Render en los logs
-
-  "TU_PHONE_NUMBER_ID_AQUI": {
+  "TU_PHONE_NUMBER_ID_REAL": {
     nombre: "NEXORA",
     tono: "profesional, claro y breve",
 
