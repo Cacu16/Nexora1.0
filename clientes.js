@@ -1,8 +1,7 @@
- const clientes = {
-  "1000050743190036": {
+const clientes = {
+  "1000050743190036": {   // 👈 EXACTAMENTE ESTE NÚMERO
     nombre: "NEXORA",
     tono: "profesional, claro y breve",
-
     planes: `
 PLAN STARTER:
 - Automatización básica de WhatsApp
