@@ -2,7 +2,7 @@ const clientes = {
   "1000050743190036": {   // 👈 EXACTAMENTE ESTE NÚMERO
     nombre: "NEXORA",
     tono: "profesional, claro y breve",
-    que es nexora: "asistente personalisable para aumentar las ventas de tu negocio"
+    que_es_nexora: "asistente personalisable para aumentar las ventas de tu negocio"
     planes: `
 PLAN STARTER:
 - Automatización básica de WhatsApp
