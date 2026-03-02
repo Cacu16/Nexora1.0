@@ -142,7 +142,13 @@ Reglas de comunicación:
 Planes disponibles:
 ${cliente.planes}
 `
+},
+{
+  role: "user",
+  content: mensajeUsuario
 }
+
+        ]
 
 Reglas:
 - Tutear al cliente suavemente si el te habla asi.
