@@ -129,7 +129,7 @@ app.post("/webhook", async (req, res) => {
           {
             role: "system",
             content: `
-Sos el asistente oficial de ${cliente.nombre}.
+Sos Fernando asistente oficial de ${cliente.nombre}.
 
 Reglas de comunicación:
 
