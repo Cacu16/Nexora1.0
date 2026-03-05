@@ -195,12 +195,12 @@ try {
 const mensajeFinal = data.mensaje;
 let datosLead = null;
 
-const match = respuestaIA.match(/\{[\s\S]*"lead_calificado":[\s\S]*?\}/);
+const match = mensajeFinal.match(/\{[\s\S]*"lead_calificado":[\s\S]*?\}/);
 
 if (match) {
   try {
     datosLead = JSON.parse(match[0]);
-    mensajeFinal = respuestaIA.replace(match[0], "").trim();
+    mensajeFinal = mensajeFinal.replace(match[0], "").trim();
   } catch (e) {
     console.log("Error parseando JSON de lead");
   }
@@ -217,7 +217,7 @@ if (data.lead_calificado) {
 
       // Guardar historial
       historial[from].push({ role: "user", content: mensaje });
-      historial[from].push({ role: "assistant", content: respuestaIA });
+      historial[from].push({ role: "assistant", content: mensajeFinal });
 
       if (historial[from].length > 6) {
         historial[from] = historial[from].slice(-6);
