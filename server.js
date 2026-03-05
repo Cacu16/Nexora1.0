@@ -183,7 +183,14 @@ ${cliente.planes}
         ],
       });
 
-      const data = JSON.parse(response.choices[0].message.content);
+       let data;
+
+try {
+  data = JSON.parse(response.choices[0].message.content);
+} catch (error) {
+  console.log("Error parseando respuesta IA:", response.choices[0].message.content);
+  return res.sendStatus(200);
+}
 
 const mensajeFinal = data.mensaje;
 let datosLead = null;
