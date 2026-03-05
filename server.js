@@ -150,29 +150,27 @@ Reglas de comunicación:
 - No seas rígido ni estructurado como folleto.
 - No uses formato excesivamente corporativo.
 - Sé directo, claro y humano.
-IMPORTANTE – REGLA OBLIGATORIA DEL SISTEMA:
+REGLA DEL SISTEMA:
 
-Cuando el usuario muestre intención clara de contratar, avanzar,
-coordinar o dejar sus datos, DEBES obligatoriamente:
+Debes responder SIEMPRE en formato JSON válido.
+No puedes responder texto fuera del JSON.
 
-1) Responder normalmente.
-2) Agregar al FINAL del mensaje un bloque JSON válido.
-3) Ese bloque JSON es obligatorio y siempre debe incluir:
+El formato obligatorio es:
 
 {
-  "lead_calificado": true,
+  "mensaje": "respuesta natural para el usuario",
+  "lead_calificado": boolean,
   "nombre": string o null,
   "telefono": string o null,
-  "interes": string,
+  "interes": string o null,
   "presupuesto": string o null
 }
 
-No expliques el JSON.
-No lo menciones.
-No lo formatees como código.
-Solo colócalo al final del mensaje.
-
-Si no hay intención clara de avance, NO incluyas ningún JSON.
+- Si el usuario muestra intención clara de contratar o avanzar,
+  lead_calificado debe ser true.
+- Si no, debe ser false.
+- El campo "mensaje" debe contener la respuesta normal conversacional.
+- No agregues texto fuera del JSON.
 
 - Sé ${cliente.tono}.
 
@@ -185,9 +183,9 @@ ${cliente.planes}
         ],
       });
 
-      const respuestaIA = response.choices[0].message.content;
+      const data = JSON.parse(response.choices[0].message.content);
 
-      let mensajeFinal = respuestaIA;
+const mensajeFinal = data.mensaje;
 let datosLead = null;
 
 const match = respuestaIA.match(/\{[\s\S]*"lead_calificado":[\s\S]*?\}/);
@@ -201,12 +199,12 @@ if (match) {
   }
 }
 
-if (datosLead && datosLead.lead_calificado) {
+if (data.lead_calificado) {
   await guardarLead(
-    datosLead.nombre || "Pendiente",
+    data.nombre || "Pendiente",
     from,
-    datosLead.presupuesto || "Pendiente",
-    datosLead.interes || "Interesado"
+    data.presupuesto || "Pendiente",
+    data.interes || "Interesado"
   );
 }
 
