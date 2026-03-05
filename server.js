@@ -187,6 +187,7 @@ ${cliente.planes}
 
 try {
   data = JSON.parse(response.choices[0].message.content);
+  console.log("DATA COMPLETA:", data);
 } catch (error) {
   console.log("Error parseando respuesta IA:", response.choices[0].message.content);
   return res.sendStatus(200);
