@@ -7,8 +7,10 @@ const clientes = require("./clientes");
 const { google } = require("googleapis");
 
 const app = express();
+const NUMERO_DUENO = "5491132465579";
 app.use(cors());
 app.use(express.json());
+
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -208,11 +210,26 @@ if (match) {
 }
 
 if (data.lead_calificado) {
-  await guardarLead(
-    data.nombre || "Pendiente",
-    from,
-    data.presupuesto || "Pendiente",
-    data.interes || "Interesado"
+  await axios.post(
+    `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to: NUMERO_DUENO,
+      text: {
+        body: `🔥 NUEVO LEAD NEXORA 🔥
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}
+Presupuesto: ${data.presupuesto || "No informado"}`
+      }
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json"
+      }
+    }
   );
 }
 
