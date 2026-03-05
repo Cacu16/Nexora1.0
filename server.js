@@ -150,6 +150,24 @@ Reglas de comunicación:
 - No seas rígido ni estructurado como folleto.
 - No uses formato excesivamente corporativo.
 - Sé directo, claro y humano.
+IMPORTANTE:
+
+Si el usuario confirma que quiere avanzar, contratar, coordinar o dejar sus datos,
+debes hacer lo siguiente:
+
+1) Responder normalmente de forma natural.
+2) Al FINAL del mensaje, agregar un bloque JSON EXACTO con esta estructura:
+
+{
+  "lead_calificado": true,
+  "nombre": "nombre del usuario si lo mencionó o null",
+  "telefono": "telefono del usuario si lo mencionó o null",
+  "interes": "servicio que desea",
+  "presupuesto": "si lo mencionó o null"
+}
+
+El bloque JSON debe ir solo, sin explicación.
+Si NO es un lead real, no agregues ningún JSON.
 - Sé ${cliente.tono}.
 
 Planes disponibles:
@@ -162,6 +180,29 @@ ${cliente.planes}
       });
 
       const respuestaIA = response.choices[0].message.content;
+
+      let mensajeFinal = respuestaIA;
+let datosLead = null;
+
+const match = respuestaIA.match(/\{[\s\S]*"lead_calificado":[\s\S]*?\}/);
+
+if (match) {
+  try {
+    datosLead = JSON.parse(match[0]);
+    mensajeFinal = respuestaIA.replace(match[0], "").trim();
+  } catch (e) {
+    console.log("Error parseando JSON de lead");
+  }
+}
+
+if (datosLead && datosLead.lead_calificado) {
+  await guardarLead(
+    datosLead.nombre || "Pendiente",
+    from,
+    datosLead.presupuesto || "Pendiente",
+    datosLead.interes || "Interesado"
+  );
+}
 
       // Guardar historial
       historial[from].push({ role: "user", content: mensaje });
@@ -187,7 +228,7 @@ ${cliente.planes}
         {
           messaging_product: "whatsapp",
           to: from,
-          text: { body: respuestaIA }
+          text: { body: mensajeFinal }
         },
         {
           headers: {
