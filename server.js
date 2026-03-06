@@ -187,12 +187,23 @@ ${cliente.planes}
 
        let data;
 
+let respuestaTexto = response.choices[0].message.content;
+let data;
+
 try {
-  data = JSON.parse(response.choices[0].message.content);
+  data = JSON.parse(respuestaTexto);
   console.log("DATA COMPLETA:", data);
 } catch (error) {
-  console.log("Error parseando respuesta IA:", response.choices[0].message.content);
-  return res.sendStatus(200);
+  console.log("Respuesta IA no vino en JSON:", respuestaTexto);
+
+  data = {
+    mensaje: respuestaTexto,
+    lead_calificado: false,
+    nombre: null,
+    telefono: null,
+    interes: null,
+    presupuesto: null
+  };
 }
 
 const mensajeFinal = data.mensaje;
