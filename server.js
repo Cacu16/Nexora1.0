@@ -188,7 +188,6 @@ ${cliente.planes}
        let data;
 
 let respuestaTexto = response.choices[0].message.content;
-let data;
 
 try {
   data = JSON.parse(respuestaTexto);
