@@ -244,32 +244,50 @@ if (match) {
   }
 }
 
+// ===============================
+// 🔔 ENVIAR LEAD AL DUEÑO
+// ===============================
+
 if (data.lead_calificado && !leadsEnviados.has(from)) {
 
   leadsEnviados.add(from);
 
-  await axios.post(
-    `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to: NUMERO_DUENO,
-      text: {
-        body: `🔥 NUEVO LEAD NEXORA 🔥
+  try {
+
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: NUMERO_DUENO,
+        text: {
+          body: `🔥 NUEVO LEAD NEXORA
 
 Nombre: ${data.nombre || "No informado"}
 Teléfono: ${from}
-Email: ${data.email || "No informado"}
 Interés: ${data.interes || "No especificado"}
 Presupuesto: ${data.presupuesto || "No informado"}`
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        }
       }
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json"
-      }
-    }
-  );
+    );
+
+    console.log("Lead enviado correctamente:", from);
+
+  } catch (error) {
+
+    console.error(
+      "Error enviando lead:",
+      error.response?.data || error.message
+    );
+
+  }
+
+}
 
 
 if (data.lead_calificado && !leadsEnviados.has(from)) {
