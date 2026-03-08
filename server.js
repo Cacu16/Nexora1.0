@@ -10,6 +10,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const NUMERO_DUENO = "5491132465579";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 // ===============================
 // GOOGLE SHEETS
 // ===============================
@@ -17,6 +23,7 @@ const auth = new google.auth.GoogleAuth({
   keyFile: "google-credentials.json",
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
+
 const sheets = google.sheets({ version: "v4", auth });
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
@@ -46,11 +53,12 @@ app.get("/webhook", (req, res) => {
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
     return res.status(200).send(challenge);
   }
+
   return res.sendStatus(403);
 });
 
 // ===============================
-// GUARDAR LEAD EN SHEETS
+// GUARDAR LEAD
 // ===============================
 async function guardarLead(nombre, telefono, rubro, interes) {
   try {
@@ -92,24 +100,27 @@ app.post("/webhook", async (req, res) => {
       console.log("Mensaje duplicado:", messageId);
       return res.sendStatus(200);
     }
+
     mensajesProcesados.add(messageId);
 
     if (!messageData.text) return res.sendStatus(200);
 
     const from = messageData.from;
     const mensaje = messageData.text.body;
+
     const phoneNumberId = value.metadata.phone_number_id;
     const cliente = clientes[phoneNumberId];
+
     if (!cliente) {
       console.log("Cliente no configurado");
       return res.sendStatus(200);
     }
+
     if (!historial[from]) historial[from] = [];
 
     // ===============================
     // CONSULTA A OPENAI
     // ===============================
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -167,7 +178,10 @@ ${cliente.planes}
 `
         },
         ...historial[from],
-        { role: "user", content: mensaje }
+        {
+          role: "user",
+          content: mensaje
+        }
       ]
     });
 
@@ -178,12 +192,16 @@ ${cliente.planes}
     try {
       data = JSON.parse(response.choices[0].message.content);
     } catch {
-      data = { mensaje: response.choices[0].message.content, lead_calificado: false };
+      data = {
+        mensaje: response.choices[0].message.content,
+        lead_calificado: false
+      };
     }
+
     const mensajeFinal = data.mensaje;
 
     // ===============================
-    // GUARDAR LEAD EN SHEETS (SI ES CALIFICADO)
+    // GUARDAR LEAD EN SHEETS
     // ===============================
     if (data.lead_calificado && !leadsEnviados.has(from)) {
       leadsEnviados.add(from);
@@ -194,25 +212,14 @@ ${cliente.planes}
         "Pendiente",
         data.interes || "Interesado"
       );
+
+      console.log("Lead guardado en Sheets");
     }
 
     // ===============================
-    // RESPONDER AL CLIENTE
+    // RESPONDER AL CLIENTE (ELIMINADO)
     // ===============================
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: from,
-        text: { body: mensajeFinal }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+    // No se envía WhatsApp al cliente
 
     // ===============================
     // HISTORIAL
