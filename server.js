@@ -271,217 +271,38 @@ Presupuesto: ${data.presupuesto || "No informado"}`
     }
   );
 
-  if (data.lead_calificado) {
 
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
+if (data.lead_calificado && !leadsEnviados.has(from)) {
+  leadsEnviados.add(from);
 
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-if (data.lead_calificado) {
-
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: NUMERO_DUENO,
+        text: {
+          body: `🔥 NUEVO LEAD NEXORA
 
 Nombre: ${data.nombre || "No informado"}
 Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
+Interés: ${data.interes || "No especificado"}
+Presupuesto: ${data.presupuesto || "No informado"}`
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-if (data.lead_calificado) {
+    console.log("Lead enviado al dueño:", from);
 
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-if (data.lead_calificado) {
-
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-if (data.lead_calificado) {
-
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-if (data.lead_calificado) {
-
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-if (data.lead_calificado) {
-
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-if (data.lead_calificado) {
-
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-if (data.lead_calificado) {
-
-await axios.post(
-`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-{
-messaging_product: "whatsapp",
-to: NUMERO_DUENO,
-text: {
-body: `🔥 NUEVO LEAD NEXORA
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}`
-}
-},
-{
-headers: {
-Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-"Content-Type": "application/json"
-}
-}
-);
-
-}
-
-
-
-  console.log("Lead enviado correctamente:", from);
+  } catch (error) {
+    console.error("Error enviando lead:", error.response?.data || error);
+  }
 }
 
       // Guardar historial
