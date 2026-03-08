@@ -271,6 +271,216 @@ Presupuesto: ${data.presupuesto || "No informado"}`
     }
   );
 
+  if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+if (data.lead_calificado) {
+
+await axios.post(
+`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+{
+messaging_product: "whatsapp",
+to: NUMERO_DUENO,
+text: {
+body: `🔥 NUEVO LEAD NEXORA
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}`
+}
+},
+{
+headers: {
+Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+"Content-Type": "application/json"
+}
+}
+);
+
+}
+
+
+
   console.log("Lead enviado correctamente:", from);
 }
 
