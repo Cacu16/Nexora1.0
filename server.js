@@ -7,17 +7,18 @@ const clientes = require("./clientes");
 const { google } = require("googleapis");
 
 const app = express();
-const NUMERO_DUENO = "5491132465579";
 app.use(cors());
 app.use(express.json());
 
+const NUMERO_DUENO = "5491132465579";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+
 // ===============================
-// 🔐 GOOGLE SHEETS CONFIG
+// GOOGLE SHEETS
 // ===============================
 
 const auth = new google.auth.GoogleAuth({
@@ -28,23 +29,30 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: "v4", auth });
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
-// ===============================
-// 🔐 VERIFY TOKEN
-// ===============================
-
-const VERIFY_TOKEN = "nexora_2026_secure";
 
 // ===============================
-// 📌 RUTA BASE
+// VARIABLES
+// ===============================
+
+const historial = {};
+const mensajesProcesados = new Set();
+const leadsEnviados = new Set();
+
+
+// ===============================
+// RUTA BASE
 // ===============================
 
 app.get("/", (req, res) => {
   res.send("Servidor NEXORA funcionando 🚀");
 });
 
+
 // ===============================
-// 🔐 WEBHOOK VERIFICACIÓN
+// VERIFY TOKEN
 // ===============================
+
+const VERIFY_TOKEN = "nexora_2026_secure";
 
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -58,315 +66,261 @@ app.get("/webhook", (req, res) => {
   }
 });
 
+
 // ===============================
-// 📊 GUARDAR LEAD EN SHEETS
+// GUARDAR LEAD
 // ===============================
 
 async function guardarLead(nombre, telefono, rubro, interes) {
   try {
+
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: "A:E",
       valueInputOption: "USER_ENTERED",
       requestBody: {
-        values: [
-          [
-            new Date().toLocaleString(),
-            nombre,
-            telefono,
-            rubro,
-            interes
-          ]
-        ]
+        values: [[
+          new Date().toLocaleString(),
+          nombre,
+          telefono,
+          rubro,
+          interes
+        ]]
       }
     });
 
     console.log("Lead guardado en Sheets");
+
   } catch (error) {
-    console.error("Error guardando en Sheets:", error);
+    console.error("Error guardando lead:", error);
   }
 }
 
-// ===============================
-// 📩 WEBHOOK MENSAJES
-// ===============================
 
-const historial = {};
-const mensajesProcesados = new Set();
-const leadsEnviados = new Set();
+// ===============================
+// WEBHOOK MENSAJES
+// ===============================
 
 app.post("/webhook", async (req, res) => {
+
   try {
+
     const body = req.body;
 
-    if (
-      body.object &&
-      body.entry &&
-      body.entry[0].changes &&
-      body.entry[0].changes[0].value.messages
-    ) {
-      const value = body.entry[0].changes[0].value;
-      const messageData = value.messages[0];
+    if (!body.entry) return res.sendStatus(200);
 
-      const messageId = messageData.id;
+    const value = body.entry[0].changes[0].value;
 
-if (mensajesProcesados.has(messageId)) {
-  console.log("Mensaje duplicado ignorado:", messageId);
-  return res.sendStatus(200);
-}
+    if (!value.messages) return res.sendStatus(200);
 
-mensajesProcesados.add(messageId);
+    const messageData = value.messages[0];
 
-      if (!messageData.text) {
-        return res.sendStatus(200);
-      }
+    const messageId = messageData.id;
 
-      const from = messageData.from;
-      const mensaje = messageData.text.body;
-      const phoneNumberId = value.metadata.phone_number_id;
+    if (mensajesProcesados.has(messageId)) {
+      console.log("Mensaje duplicado ignorado:", messageId);
+      return res.sendStatus(200);
+    }
 
-      console.log("phoneNumberId:", phoneNumberId);
+    mensajesProcesados.add(messageId);
 
-      const cliente = clientes[phoneNumberId];
+    if (!messageData.text) return res.sendStatus(200);
 
-      if (!cliente) {
-        console.log("Cliente no configurado");
-        return res.sendStatus(200);
-      }
+    const from = messageData.from;
+    const mensaje = messageData.text.body;
 
-      if (!historial[from]) historial[from] = [];
+    const phoneNumberId = value.metadata.phone_number_id;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `
+    const cliente = clientes[phoneNumberId];
+
+    if (!cliente) {
+      console.log("Cliente no configurado");
+      return res.sendStatus(200);
+    }
+
+    if (!historial[from]) historial[from] = [];
+
+
+// ===============================
+// CONSULTA A OPENAI
+// ===============================
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+         role: "system",
+content: `
 Tu nombre es Fer.
 
 Sos Fer, el asistente oficial de NEXORA.
 Siempre te presentás como Fer cuando hablas con un cliente.
 
-Nunca digas que no tenés nombre.
-Nunca digas que sos una IA o un asistente genérico.
+Nunca digas que sos una IA.
+Nunca digas que sos un asistente genérico.
 
 Tu función es ayudar a personas interesadas en automatizar su WhatsApp con inteligencia artificial usando NEXORA.
-Respondés de forma clara, breve y natural.
 
-Si el cliente pregunta quién sos, respondé:
+Respondé de forma clara, breve y natural.
+
+Si el cliente pregunta quién sos:
 "Soy Fer, asistente de NEXORA. Estoy para ayudarte con información sobre nuestros planes y automatizaciones."
 
-Si el cliente dice su nombre, guardalo como nombre del cliente.
-
 Reglas de comunicación:
+
 - No inventes procesos internos.
-- No menciones contratos, documentos, reuniones, llamados o pasos que no estén explícitamente definidos en los planes.
-- Si el usuario confirma que quiere contratar o avanzar:
-   - SIEMPRE pedí explícitamente su correo electrónico.
-   - SIEMPRE confirmá Ssu número de contacto.
-   - No asumas que ya tenemos sus datos.
-   - No digas que un asesor lo contactará hasta que el usuario haya enviado sus datos.
-   - Primero pedí los datos. Después confirmá que serán contactados.
-- Nunca prometas envío de contrato si no está definido.
-- Detectá automáticamente el estilo del usuario.
-- Si el usuario habla informal (me pasás, cuánto sale, che, hola genio, etc), respondé usando tuteo argentino natural.
-- Está prohibido usar lenguaje corporativo o neutro si el usuario habla informal.
-- No uses frases como: "Con gusto", "Estimado", "Aquí tienes", "No dudes en".
-- Hablá como una persona real, cercana y segura.
-- Si el usuario usa trato formal (usted, podría indicarme), respondé formalmente.
-- No seas rígido ni estructurado como folleto.
-- No uses formato excesivamente corporativo.
-- Sé directo, claro y humano.
-REGLA DEL SISTEMA:
+- No menciones contratos, documentos o reuniones que no estén definidos.
+- Si el usuario quiere contratar:
+  - Pedí su correo electrónico.
+  - Confirmá su número de contacto.
 
-Debes responder SIEMPRE en formato JSON válido.
-No puedes responder texto fuera del JSON.
+Tono:
 
-El formato obligatorio es:
+- Si el usuario habla informal → respondé en tuteo argentino.
+- Si habla formal → respondé formalmente.
+- No uses lenguaje corporativo.
+- Hablá como una persona real.
+
+FORMATO OBLIGATORIO:
+
+Debes responder SIEMPRE en JSON válido.
 
 {
-  "mensaje": "respuesta natural para el usuario",
-  "lead_calificado": boolean,
-  "nombre": string o null,
-  "telefono": string o null,
-  "interes": string o null,
-  "presupuesto": string o null
+"mensaje": "respuesta al usuario",
+"lead_calificado": false,
+"nombre": null,
+"telefono": null,
+"interes": null,
+"presupuesto": null
 }
 
-- Si el usuario muestra intención clara de contratar o avanzar,
-  lead_calificado debe ser true.
-- Si no, debe ser false.
-- El campo "mensaje" debe contener la respuesta normal conversacional.
-- No agregues texto fuera del JSON.
+Si el usuario muestra intención clara de contratar:
 
-- Sé ${cliente.tono}.
+lead_calificado = true
 
 Planes disponibles:
+
 ${cliente.planes}
 `
-          },
-          ...historial[from],
-          { role: "user", content: mensaje }
-        ],
-      });
 
-       let data;
-
-let respuestaTexto = response.choices[0].message.content;
-
-try {
-  data = JSON.parse(respuestaTexto);
-  console.log("DATA COMPLETA:", data);
-} catch (error) {
-  console.log("Respuesta IA no vino en JSON:", respuestaTexto);
-
-  data = {
-    mensaje: respuestaTexto,
-    lead_calificado: false,
-    nombre: null,
-    telefono: null,
-    interes: null,
-    presupuesto: null
-  };
-}
-
-const mensajeFinal = data.mensaje;
-let datosLead = null;
-
-const match = mensajeFinal.match(/\{[\s\S]*"lead_calificado":[\s\S]*?\}/);
-
-if (match) {
-  try {
-    datosLead = JSON.parse(match[0]);
-    mensajeFinal = mensajeFinal.replace(match[0], "").trim();
-  } catch (e) {
-    console.log("Error parseando JSON de lead");
-  }
-}
-
-// ===============================
-// 🔔 ENVIAR LEAD AL DUEÑO
-// ===============================
-
-if (data.lead_calificado && !leadsEnviados.has(from)) {
-
-  leadsEnviados.add(from);
-
-  try {
-
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: NUMERO_DUENO,
-        text: {
-          body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}
-Presupuesto: ${data.presupuesto || "No informado"}`
-        }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    console.log("Lead enviado correctamente:", from);
-
-  } catch (error) {
-
-    console.error(
-      "Error enviando lead:",
-      error.response?.data || error.message
-    );
-
-  }
-
-}
-
-
-if (data.lead_calificado && !leadsEnviados.has(from)) {
-  leadsEnviados.add(from);
-
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: NUMERO_DUENO,
-        text: {
-          body: `🔥 NUEVO LEAD NEXORA
-
-Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
-Interés: ${data.interes || "No especificado"}
-Presupuesto: ${data.presupuesto || "No informado"}`
-        }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
-
-    console.log("Lead enviado al dueño:", from);
-
-  } catch (error) {
-    console.error("Error enviando lead:", error.response?.data || error);
-  }
-}
-
-      // Guardar historial
-      historial[from].push({ role: "user", content: mensaje });
-      historial[from].push({ role: "assistant", content: mensajeFinal });
-
-      if (historial[from].length > 6) {
-        historial[from] = historial[from].slice(-6);
-      }
-
-      // 🔥 Detectar interés simple
-      const mensajeLower = mensaje.toLowerCase();
-
-      if (
-        mensajeLower.includes("me interesa") ||
-        mensajeLower.includes("quiero contratar")
-      ) {
-        await guardarLead("Pendiente", from, "Pendiente", "Interesado");
-      }
-
-      // 📤 Enviar respuesta por WhatsApp
-      await axios.post(
-        `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-        {
-          messaging_product: "whatsapp",
-          to: NUMERO_DUENO,
-          text: { body: mensajeFinal }
         },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-            "Content-Type": "application/json"
+        ...historial[from],
+        { role: "user", content: mensaje }
+      ],
+    });
+
+    let data;
+
+    try {
+      data = JSON.parse(response.choices[0].message.content);
+    } catch {
+
+      data = {
+        mensaje: response.choices[0].message.content,
+        lead_calificado: false
+      };
+
+    }
+
+    const mensajeFinal = data.mensaje;
+
+
+// ===============================
+// ENVIAR LEAD AL DUEÑO
+// ===============================
+
+    if (data.lead_calificado && !leadsEnviados.has(from)) {
+
+      leadsEnviados.add(from);
+
+      try {
+
+        await axios.post(
+          `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+          {
+            messaging_product: "whatsapp",
+            to: NUMERO_DUENO,
+            text: {
+              body: `🔥 NUEVO LEAD NEXORA
+
+Nombre: ${data.nombre || "No informado"}
+Teléfono: ${from}
+Interés: ${data.interes || "No especificado"}
+Presupuesto: ${data.presupuesto || "No informado"}`
+            }
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+              "Content-Type": "application/json"
+            }
           }
-        }
+        );
+
+        console.log("Lead enviado al dueño:", from);
+
+      } catch (error) {
+
+        console.error("Error enviando lead:", error.response?.data || error);
+
+      }
+
+      await guardarLead(
+        data.nombre || "No informado",
+        from,
+        "Pendiente",
+        data.interes || "Interesado"
       );
+
+    }
+
+
+// ===============================
+// RESPONDER AL CLIENTE
+// ===============================
+
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: from,
+        text: { body: mensajeFinal }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+
+// ===============================
+// GUARDAR HISTORIAL
+// ===============================
+
+    historial[from].push({ role: "user", content: mensaje });
+    historial[from].push({ role: "assistant", content: mensajeFinal });
+
+    if (historial[from].length > 6) {
+      historial[from] = historial[from].slice(-6);
     }
 
     res.sendStatus(200);
+
   } catch (error) {
+
     console.error("Error webhook:", error.response?.data || error);
+
     res.sendStatus(500);
+
   }
+
 });
 
+
 // ===============================
-// 🚀 SERVER
+// SERVER
 // ===============================
 
 const PORT = process.env.PORT || 3000;
