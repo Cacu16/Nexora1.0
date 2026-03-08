@@ -259,7 +259,7 @@ ${cliente.planes}
           `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
           {
             messaging_product: "whatsapp",
-            to: NUMERO_DUENO,
+            to: from,
             text: {
               body: `🔥 NUEVO LEAD NEXORA
 
@@ -277,7 +277,7 @@ Presupuesto: ${data.presupuesto || "No informado"}`
           }
         );
 
-        console.log("Lead enviado:", from);
+        console.log("Lead enviado:", NUMERO_DUENO);
 
       } catch (error) {
 
