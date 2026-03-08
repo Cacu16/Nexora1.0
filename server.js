@@ -27,6 +27,7 @@ const auth = new google.auth.GoogleAuth({
 });
 
 const sheets = google.sheets({ version: "v4", auth });
+
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 
@@ -55,15 +56,17 @@ app.get("/", (req, res) => {
 const VERIFY_TOKEN = "nexora_2026_secure";
 
 app.get("/webhook", (req, res) => {
+
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
     return res.status(200).send(challenge);
-  } else {
-    return res.sendStatus(403);
   }
+
+  return res.sendStatus(403);
+
 });
 
 
@@ -72,6 +75,7 @@ app.get("/webhook", (req, res) => {
 // ===============================
 
 async function guardarLead(nombre, telefono, rubro, interes) {
+
   try {
 
     await sheets.spreadsheets.values.append({
@@ -92,8 +96,11 @@ async function guardarLead(nombre, telefono, rubro, interes) {
     console.log("Lead guardado en Sheets");
 
   } catch (error) {
+
     console.error("Error guardando lead:", error);
+
   }
+
 }
 
 
@@ -114,11 +121,10 @@ app.post("/webhook", async (req, res) => {
     if (!value.messages) return res.sendStatus(200);
 
     const messageData = value.messages[0];
-
     const messageId = messageData.id;
 
     if (mensajesProcesados.has(messageId)) {
-      console.log("Mensaje duplicado ignorado:", messageId);
+      console.log("Mensaje duplicado:", messageId);
       return res.sendStatus(200);
     }
 
@@ -146,15 +152,18 @@ app.post("/webhook", async (req, res) => {
 // ===============================
 
     const response = await openai.chat.completions.create({
+
       model: "gpt-4o-mini",
+
       messages: [
+
         {
-         role: "system",
-content: `
+          role: "system",
+          content: `
 Tu nombre es Fer.
 
 Sos Fer, el asistente oficial de NEXORA.
-Siempre te presentás como Fer cuando hablas con un cliente.
+Siempre te presentás como Fer cuando hablás con un cliente.
 
 Nunca digas que sos una IA.
 Nunca digas que sos un asistente genérico.
@@ -166,24 +175,22 @@ Respondé de forma clara, breve y natural.
 Si el cliente pregunta quién sos:
 "Soy Fer, asistente de NEXORA. Estoy para ayudarte con información sobre nuestros planes y automatizaciones."
 
-Reglas de comunicación:
+Reglas:
 
 - No inventes procesos internos.
-- No menciones contratos, documentos o reuniones que no estén definidos.
+- No menciones contratos o reuniones inexistentes.
 - Si el usuario quiere contratar:
-  - Pedí su correo electrónico.
-  - Confirmá su número de contacto.
+  - pedí su correo
+  - confirmá su número
 
 Tono:
 
-- Si el usuario habla informal → respondé en tuteo argentino.
-- Si habla formal → respondé formalmente.
-- No uses lenguaje corporativo.
-- Hablá como una persona real.
+- Si habla informal → tuteo argentino
+- Si habla formal → formal
+- Hablá natural
+- No corporativo
 
-FORMATO OBLIGATORIO:
-
-Debes responder SIEMPRE en JSON válido.
+FORMATO OBLIGATORIO (JSON válido):
 
 {
 "mensaje": "respuesta al usuario",
@@ -202,17 +209,30 @@ Planes disponibles:
 
 ${cliente.planes}
 `
-
         },
+
         ...historial[from],
-        { role: "user", content: mensaje }
-      ],
+
+        {
+          role: "user",
+          content: mensaje
+        }
+
+      ]
+
     });
+
+
+// ===============================
+// PARSEAR RESPUESTA
+// ===============================
 
     let data;
 
     try {
+
       data = JSON.parse(response.choices[0].message.content);
+
     } catch {
 
       data = {
@@ -257,7 +277,7 @@ Presupuesto: ${data.presupuesto || "No informado"}`
           }
         );
 
-        console.log("Lead enviado al dueño:", from);
+        console.log("Lead enviado:", from);
 
       } catch (error) {
 
@@ -296,7 +316,7 @@ Presupuesto: ${data.presupuesto || "No informado"}`
 
 
 // ===============================
-// GUARDAR HISTORIAL
+// HISTORIAL
 // ===============================
 
     historial[from].push({ role: "user", content: mensaje });
