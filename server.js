@@ -92,6 +92,7 @@ async function guardarLead(nombre, telefono, rubro, interes) {
 // ===============================
 
 const historial = {};
+const mensajesProcesados = new Set();
 
 app.post("/webhook", async (req, res) => {
   try {
@@ -105,6 +106,15 @@ app.post("/webhook", async (req, res) => {
     ) {
       const value = body.entry[0].changes[0].value;
       const messageData = value.messages[0];
+
+      const messageId = messageData.id;
+
+if (mensajesProcesados.has(messageId)) {
+  console.log("Mensaje duplicado ignorado:", messageId);
+  return res.sendStatus(200);
+}
+
+mensajesProcesados.add(messageId);
 
       if (!messageData.text) {
         return res.sendStatus(200);
@@ -219,7 +229,10 @@ if (match) {
   }
 }
 
-if (data.lead_calificado) {
+if (data.lead_calificado && !leadsEnviados.has(from)) {
+
+  leadsEnviados.add(from);
+
   await axios.post(
     `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
     {
@@ -230,6 +243,7 @@ if (data.lead_calificado) {
 
 Nombre: ${data.nombre || "No informado"}
 Teléfono: ${from}
+Email: ${data.email || "No informado"}
 Interés: ${data.interes || "No especificado"}
 Presupuesto: ${data.presupuesto || "No informado"}`
       }
@@ -241,6 +255,8 @@ Presupuesto: ${data.presupuesto || "No informado"}`
       }
     }
   );
+
+  console.log("Lead enviado correctamente:", from);
 }
 
       // Guardar historial
