@@ -259,12 +259,12 @@ ${cliente.planes}
           `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
           {
             messaging_product: "whatsapp",
-            to: from,
+            to: NUMERO_DUENO,
             text: {
               body: `🔥 NUEVO LEAD NEXORA
 
 Nombre: ${data.nombre || "No informado"}
-Teléfono: ${from}
+Teléfono: https://wa.me/${from}
 Interés: ${data.interes || "No especificado"}
 Presupuesto: ${data.presupuesto || "No informado"}`
             }
@@ -277,7 +277,7 @@ Presupuesto: ${data.presupuesto || "No informado"}`
           }
         );
 
-        console.log("Lead enviado:", NUMERO_DUENO);
+        console.log("Lead enviado al dueño:", NUMERO_DUENO);
 
       } catch (error) {
 
