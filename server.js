@@ -230,7 +230,12 @@ Tono:
 - Hablá natural.
 - No uses lenguaje corporativo innecesario.
 
-FORMATO OBLIGATORIO (JSON válido):
+IMPORTANTE:
+Respondé SOLO con JSON válido.
+No agregues texto antes ni después del JSON.
+No escribas palabras como "json" ni explicaciones extra.
+
+Formato obligatorio:
 
 {
   "mensaje": "respuesta al usuario",
@@ -257,13 +262,43 @@ ${cliente.planes}
     // PARSEAR RESPUESTA
     // ===============================
 
-    let data;
+   const respuestaCruda = response.choices[0].message.content;
 
+let data = {
+  mensaje: respuestaCruda,
+  lead_calificado: false,
+  nombre: null,
+  telefono: null,
+  interes: null,
+  presupuesto: null,
+};
+
+try {
+  // Caso ideal: OpenAI devuelve JSON puro
+  data = JSON.parse(respuestaCruda);
+} catch {
+  // Caso mixto: texto + json
+  const match = respuestaCruda.match(/\{[\s\S]*\}/);
+
+  if (match) {
     try {
-      data = JSON.parse(response.choices[0].message.content);
-    } catch {
+      const jsonExtraido = JSON.parse(match[0]);
+
       data = {
-        mensaje: response.choices[0].message.content,
+        mensaje:
+          jsonExtraido.mensaje ||
+          respuestaCruda.replace(match[0], "").trim() ||
+          "Perfecto 👍 ¿En qué puedo ayudarte?",
+        lead_calificado: jsonExtraido.lead_calificado || false,
+        nombre: jsonExtraido.nombre || null,
+        telefono: jsonExtraido.telefono || null,
+        interes: jsonExtraido.interes || null,
+        presupuesto: jsonExtraido.presupuesto || null,
+      };
+    } catch {
+      // si ni el JSON extraído sirve, dejamos solo texto limpio
+      data = {
+        mensaje: respuestaCruda.replace(/\{[\s\S]*\}/, "").trim() || "Perfecto 👍 ¿En qué puedo ayudarte?",
         lead_calificado: false,
         nombre: null,
         telefono: null,
@@ -271,8 +306,10 @@ ${cliente.planes}
         presupuesto: null,
       };
     }
+  }
+}
 
-    const mensajeFinal = data.mensaje || "Perfecto 👍 ¿En qué puedo ayudarte?";
+const mensajeFinal = data.mensaje || "Perfecto 👍 ¿En qué puedo ayudarte?";
 
     // ===============================
     // ENVIAR LEAD POR EMAIL Y GUARDAR
