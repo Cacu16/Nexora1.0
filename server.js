@@ -297,7 +297,7 @@ Presupuesto: ${data.presupuesto || "No informado"}`
         `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
         {
           messaging_product: "whatsapp",
-          to: from,
+          to: NUMERO_DUENO,
           text: { body: mensajeFinal }
         },
         {
