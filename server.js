@@ -142,7 +142,7 @@ mensajesProcesados.add(messageId);
           {
             role: "system",
             content: `
-Sos Fernando asistente oficial de ${cliente.nombre}.
+Sos Fer asistente oficial de ${cliente.nombre}.
 
 Reglas de comunicación:
 - No inventes procesos internos.
