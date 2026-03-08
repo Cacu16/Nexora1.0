@@ -93,6 +93,7 @@ async function guardarLead(nombre, telefono, rubro, interes) {
 
 const historial = {};
 const mensajesProcesados = new Set();
+const leadsEnviados = new Set();
 
 app.post("/webhook", async (req, res) => {
   try {
