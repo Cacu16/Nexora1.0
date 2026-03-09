@@ -38,24 +38,6 @@ if (SPREADSHEET_ID) {
 // EMAIL
 // ===============================
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
-
-transporter.verify((error, success) => {
-  if (error) {
-    console.error("Error verificando transporter:", error);
-  } else {
-    console.log("Transporter listo para enviar mails");
-  }
-});
-
 // ===============================
 // VARIABLES
 // ===============================
