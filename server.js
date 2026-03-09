@@ -5,7 +5,8 @@ const OpenAI = require("openai");
 const axios = require("axios");
 const clientes = require("./clientes");
 const { google } = require("googleapis");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const app = express();
 app.use(cors());
@@ -127,19 +128,25 @@ async function guardarLead(nombre, telefono, rubro, interes) {
 
 async function enviarEmailLead(nombre, telefono, interes, presupuesto) {
   try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: DEST_EMAIL,
+
+    await resend.emails.send({
+      from: "NEXORA <onboarding@resend.dev>",
+      to: ["contactonexora16@gmail.com"],
       subject: "🔥 NUEVO LEAD NEXORA",
-      text: `Nombre: ${nombre || "No informado"}
+      text: `
+Nombre: ${nombre || "No informado"}
 Teléfono: ${telefono}
 Interés: ${interes || "No especificado"}
-Presupuesto: ${presupuesto || "No informado"}`,
+Presupuesto: ${presupuesto || "No informado"}
+`
     });
 
-    console.log("Lead enviado por email a:", DEST_EMAIL);
+    console.log("Lead enviado por email");
+
   } catch (error) {
-    console.error("Error enviando email:", error.response?.data || error.message || error);
+
+    console.error("Error enviando email:", error);
+
   }
 }
 
