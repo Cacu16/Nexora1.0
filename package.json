@@ -2,13 +2,17 @@
   "name": "nexora",
   "version": "1.0.0",
   "private": true,
-  "main": "server.js",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"node server.js\" \"vite\"",
     "dev:server": "node server.js",
     "dev:ui": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "desktop:dev": "concurrently -k \"node server.js\" \"vite\" \"wait-on http://localhost:3000 http://localhost:5173 && cross-env ELECTRON_RUN_AS_NODE= ELECTRON_START_URL=http://localhost:5173 electron .\"",
+    "desktop": "npm run build && cross-env ELECTRON_RUN_AS_NODE= electron .",
+    "desktop:pack": "rimraf release && npm run build && electron-builder --dir",
+    "desktop:dist": "rimraf release && npm run build && electron-builder"
   },
   "keywords": [],
   "author": "",
@@ -30,6 +34,54 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.4",
     "concurrently": "^9.2.1",
-    "vite": "^7.1.10"
+    "cross-env": "^10.0.0",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "rimraf": "^6.0.1",
+    "vite": "^7.1.10",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.nexora.desktop",
+    "productName": "Nexora",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "executableName": "electron",
+    "afterExtract": "electron/ensure-electron-exe.js",
+    "afterPack": "electron/ensure-electron-exe.js",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "lib/**/*",
+      "data/**/*",
+      "server.js",
+      "clientes.js",
+      "package.json",
+      "google-credentials.json",
+      ".env"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.js"
+    },
+    "electronFuses": {
+      "runAsNode": false
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
