@@ -1,9 +1,14 @@
 {
   "name": "nexora",
   "version": "1.0.0",
-  "main": "index.js",
+  "private": true,
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "concurrently \"node server.js\" \"vite\"",
+    "dev:server": "node server.js",
+    "dev:ui": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "keywords": [],
   "author": "",
@@ -18,6 +23,13 @@
     "googleapis": "^171.4.0",
     "nodemailer": "^8.0.1",
     "openai": "^6.22.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
     "resend": "^6.9.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.2.1",
+    "vite": "^7.1.10"
   }
 }
