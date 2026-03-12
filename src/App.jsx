@@ -1,5 +1,14 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
 
+const defaultConfig = {
+  mainPrompt: [
+    "Sos el operador principal de Nexora para conversaciones comerciales por WhatsApp.",
+    "Representas a Nexora y adaptas cada respuesta al contexto del cliente activo.",
+    "Tu prioridad es responder con claridad, detectar oportunidades reales y mover la conversacion hacia una accion concreta.",
+    "Usa solo la informacion disponible en la configuracion del cliente y evita inventar detalles.",
+  ].join("\n"),
+};
+
 const emptyClient = {
   id: "",
   nombre: "",
@@ -10,6 +19,8 @@ const emptyClient = {
   businessDescription: "",
   leadGoal: "",
   greeting: "",
+  leadEmail: "",
+  clientPrompt: "",
   promptNotes: [""],
   planes: [
     {
@@ -31,6 +42,9 @@ function createClientDraft() {
     businessDescription: "Describe el negocio, su propuesta de valor y el tipo de clientes que atiende.",
     leadGoal: "Definir si el prospecto esta listo para contratar y pedir sus datos.",
     greeting: "Estoy para ayudarte con informacion sobre nuestros planes y automatizaciones.",
+    leadEmail: "",
+    clientPrompt:
+      "Habla como parte del negocio. Usa el contexto comercial del cliente y lleva la conversacion hacia una accion concreta.",
     promptNotes: [
       "Nunca digas que sos una IA.",
       "Habla de forma breve y directa.",
@@ -47,7 +61,7 @@ function createClientDraft() {
   };
 }
 
-function buildPromptPreview(client) {
+function buildPromptPreview(client, config) {
   const notes = client.promptNotes.filter(Boolean);
   const planes = client.planes
     .map((plan) => {
@@ -62,12 +76,18 @@ function buildPromptPreview(client) {
     })
     .join("\n\n");
 
-  return `Asistente: ${client.assistantName || "Fer"}\nMarca: ${
+  return `Prompt principal Nexora:\n${
+    config.mainPrompt || "Sin prompt principal"
+  }\n\nAsistente: ${client.assistantName || "Fer"}\nMarca: ${
     client.businessName || client.nombre || "Cliente"
   }\nTono: ${client.tono || "Sin definir"}\n\nDescripcion:\n${
     client.businessDescription || "Sin descripcion"
   }\n\nObjetivo del lead:\n${client.leadGoal || "Sin objetivo"}\n\nSaludo:\n${
     client.greeting || "Sin saludo"
+  }\n\nEmail de leads:\n${
+    client.leadEmail || "Sin email definido"
+  }\n\nPrompt especifico del cliente:\n${
+    client.clientPrompt || "Sin instrucciones extra"
   }\n\nReglas:\n${
     notes.length ? notes.map((item) => `- ${item}`).join("\n") : "- Sin reglas"
   }\n\nPlanes:\n${planes || "Sin planes"}`;
@@ -77,6 +97,7 @@ function App() {
   const [clients, setClients] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState(createClientDraft());
+  const [config, setConfig] = useState(defaultConfig);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -84,7 +105,7 @@ function App() {
   const deferredSearch = useDeferredValue(search);
 
   useEffect(() => {
-    loadClients();
+    loadData();
   }, []);
 
   useEffect(() => {
@@ -96,16 +117,30 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [statusMessage]);
 
-  async function loadClients(nextSelectedId) {
+  async function loadData(nextSelectedId) {
     setLoading(true);
 
     try {
-      const response = await fetch("/api/clientes");
-      const data = await response.json();
-      const list = Array.isArray(data.clientes) ? data.clientes : [];
+      const [clientsResponse, configResponse] = await Promise.all([
+        fetch("/api/clientes"),
+        fetch("/api/config"),
+      ]);
+
+      if (!clientsResponse.ok || !configResponse.ok) {
+        throw new Error("load_failed");
+      }
+
+      const clientsData = await clientsResponse.json();
+      const configData = await configResponse.json();
+      const list = Array.isArray(clientsData.clientes) ? clientsData.clientes : [];
+      const nextConfig =
+        configData?.config && typeof configData.config === "object"
+          ? { ...defaultConfig, ...configData.config }
+          : defaultConfig;
 
       startTransition(() => {
         setClients(list);
+        setConfig(nextConfig);
 
         const preferredId = nextSelectedId || selectedId || list[0]?.id || "";
         const current =
@@ -136,6 +171,13 @@ function App() {
         field === "nombre" && (!current.businessName || current.businessName === current.nombre)
           ? value
           : current.businessName,
+    }));
+  }
+
+  function updateConfigField(field, value) {
+    setConfig((current) => ({
+      ...current,
+      [field]: value,
     }));
   }
 
@@ -247,21 +289,35 @@ function App() {
       const method = editingExistingClient ? "PUT" : "POST";
       const url = editingExistingClient ? `/api/clientes/${selectedId}` : "/api/clientes";
 
-      const response = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(draft),
-      });
+      const [configResponse, clientResponse] = await Promise.all([
+        fetch("/api/config", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(config),
+        }),
+        fetch(url, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(draft),
+        }),
+      ]);
 
-      if (!response.ok) {
+      if (!configResponse.ok || !clientResponse.ok) {
         throw new Error("save_failed");
       }
 
-      const data = await response.json();
+      const configData = await configResponse.json();
+      const clientData = await clientResponse.json();
+      setConfig({
+        ...defaultConfig,
+        ...(configData.config || {}),
+      });
       setStatusMessage("Configuracion guardada.");
-      await loadClients(data.cliente.id);
+      await loadData(clientData.cliente.id);
     } catch (error) {
       setStatusMessage("No se pudo guardar.");
     } finally {
@@ -293,7 +349,7 @@ function App() {
 
       setStatusMessage("Cliente eliminado.");
       setSelectedId("");
-      await loadClients("");
+      await loadData("");
     } catch (error) {
       setStatusMessage("No se pudo eliminar.");
     }
@@ -392,6 +448,26 @@ function App() {
             <article className="card form-card">
               <div className="section-header">
                 <div>
+                  <span className="section-kicker">Nexora</span>
+                  <h2>Prompt principal</h2>
+                </div>
+              </div>
+
+              <div className="stack">
+                <label className="field">
+                  <span>Prompt maestro de Nexora</span>
+                  <textarea
+                    rows="8"
+                    value={config.mainPrompt}
+                    onChange={(event) => updateConfigField("mainPrompt", event.target.value)}
+                  />
+                </label>
+              </div>
+            </article>
+
+            <article className="card form-card">
+              <div className="section-header">
+                <div>
                   <span className="section-kicker">Perfil</span>
                   <h2>Datos principales</h2>
                 </div>
@@ -454,6 +530,26 @@ function App() {
                     rows="3"
                     value={draft.greeting}
                     onChange={(event) => updateField("greeting", event.target.value)}
+                  />
+                </label>
+                <label className="field field-full">
+                  <span>Email de leads</span>
+                  <input
+                    type="email"
+                    value={draft.leadEmail || ""}
+                    onChange={(event) => updateField("leadEmail", event.target.value)}
+                    placeholder="leads@cliente.com"
+                  />
+                  <small className="field-hint">
+                    Si lo dejas vacio, los leads se envian al correo principal de Nexora.
+                  </small>
+                </label>
+                <label className="field field-full">
+                  <span>Prompt especifico del cliente</span>
+                  <textarea
+                    rows="6"
+                    value={draft.clientPrompt}
+                    onChange={(event) => updateField("clientPrompt", event.target.value)}
                   />
                 </label>
               </div>
@@ -568,7 +664,7 @@ function App() {
               <span className="pill accent">{draft.assistantName || "Fer"}</span>
             </div>
 
-            <pre>{buildPromptPreview(draft)}</pre>
+            <pre>{buildPromptPreview(draft, config)}</pre>
           </article>
 
           <article className="card metrics-card">

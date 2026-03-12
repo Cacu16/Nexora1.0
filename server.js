@@ -12,6 +12,7 @@ const {
   removeCliente,
   saveCliente,
 } = require("./lib/clientStore");
+const { getConfig, saveConfig } = require("./lib/configStore");
 
 const app = express();
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
@@ -31,6 +32,7 @@ const leadsEnviados = new Set();
 
 const VERIFY_TOKEN = "nexora_2026_secure";
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+const DEFAULT_LEAD_EMAIL = "contactonexora16@gmail.com";
 let sheets = null;
 
 if (SPREADSHEET_ID) {
@@ -63,12 +65,19 @@ function buildPlanesText(cliente) {
     .join("\n\n");
 }
 
-function buildSystemPrompt(cliente) {
+function buildSystemPrompt(cliente, config) {
   const promptNotes = Array.isArray(cliente.promptNotes) && cliente.promptNotes.length
     ? cliente.promptNotes.map((note) => `- ${note}`).join("\n")
     : "- Responde de forma clara, breve y natural.";
 
+  const globalPrompt = String(config?.mainPrompt || "").trim();
+  const clientPrompt = String(cliente.clientPrompt || "").trim();
+
   return `
+PROMPT PRINCIPAL NEXORA:
+${globalPrompt || "Sos el operador principal de Nexora."}
+
+CONTEXTO DEL CLIENTE:
 Tu nombre es ${cliente.assistantName || "Fer"}.
 Sos ${cliente.assistantName || "Fer"}, el asistente oficial de ${cliente.businessName || cliente.nombre}.
 Siempre te presentas como ${cliente.assistantName || "Fer"} cuando hablas con un cliente.
@@ -89,6 +98,9 @@ ${promptNotes}
 
 Tono:
 ${cliente.tono || "Claro y natural"}
+
+PROMPT ESPECIFICO DEL CLIENTE:
+${clientPrompt || "Sin instrucciones extra para este cliente."}
 
 IMPORTANTE:
 Responde SOLO con JSON valido.
@@ -135,18 +147,21 @@ async function guardarLead(nombre, telefono, rubro, interes) {
   }
 }
 
-async function enviarEmailLead(nombre, telefono, interes, presupuesto) {
+async function enviarEmailLead(cliente, to, nombre, telefono, interes, presupuesto) {
   if (!resend) {
     console.log("Resend no configurado, se omite envio de email");
     return;
   }
 
+  const businessLabel = cliente?.businessName || cliente?.nombre || "NEXORA";
+
   try {
     await resend.emails.send({
       from: "NEXORA <onboarding@resend.dev>",
-      to: ["contactonexora16@gmail.com"],
-      subject: "Nuevo lead NEXORA",
+      to: [to],
+      subject: `Nuevo lead - ${businessLabel}`,
       text: `
+Cliente: ${businessLabel}
 Nombre: ${nombre || "No informado"}
 Telefono: ${telefono || "No informado"}
 Interes: ${interes || "No especificado"}
@@ -190,6 +205,12 @@ app.get("/api/clientes", (req, res) => {
   });
 });
 
+app.get("/api/config", (req, res) => {
+  res.json({
+    config: getConfig(),
+  });
+});
+
 app.get("/api/clientes/:id", (req, res) => {
   const cliente = getCliente(req.params.id);
 
@@ -204,6 +225,15 @@ app.post("/api/clientes", (req, res) => {
   try {
     const cliente = saveCliente(req.body);
     return res.status(201).json({ cliente });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.put("/api/config", (req, res) => {
+  try {
+    const config = saveConfig(req.body);
+    return res.json({ config });
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
@@ -289,6 +319,7 @@ app.post("/webhook", async (req, res) => {
     const mensaje = messageData.text.body;
     const phoneNumberId = value.metadata.phone_number_id;
     const cliente = getCliente(phoneNumberId);
+    const config = getConfig();
 
     if (!cliente) {
       console.log("Cliente no configurado para phoneNumberId:", phoneNumberId);
@@ -304,7 +335,7 @@ app.post("/webhook", async (req, res) => {
       messages: [
         {
           role: "system",
-          content: buildSystemPrompt(cliente),
+          content: buildSystemPrompt(cliente, config),
         },
         ...historial[from],
         { role: "user", content: mensaje },
@@ -360,6 +391,7 @@ app.post("/webhook", async (req, res) => {
 
     if (data.lead_calificado && !leadsEnviados.has(from)) {
       leadsEnviados.add(from);
+      const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
 
       await guardarLead(
         data.nombre || "No informado",
@@ -369,6 +401,8 @@ app.post("/webhook", async (req, res) => {
       );
 
       await enviarEmailLead(
+        cliente,
+        leadEmail,
         data.nombre || "No informado",
         from,
         data.interes || "Interesado",
