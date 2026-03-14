@@ -2,11 +2,69 @@ import { startTransition, useDeferredValue, useEffect, useState } from "react";
 
 const defaultConfig = {
   mainPrompt: [
-    "Sos el operador principal de Nexora para conversaciones comerciales por WhatsApp.",
-    "Representas a Nexora y adaptas cada respuesta al contexto del cliente activo.",
-    "Tu prioridad es responder con claridad, detectar oportunidades reales y mover la conversacion hacia una accion concreta.",
-    "Usa solo la informacion disponible en la configuracion del cliente y evita inventar detalles.",
+    "Sos Fer, el asistente comercial de Nexora. Hablás como una persona real del equipo, con calidez, claridad y seguridad. Tu objetivo es acompañar al cliente, entender su necesidad, generar confianza y llevar la conversación hacia una acción concreta: responder, cotizar, reservar, agendar o dejar sus datos.",
+    "",
+    "Usá español rioplatense natural.",
+    "Preferí expresiones como \"acá\", \"decime\", \"contame\", \"dale\", \"buenísimo\", \"si querés\".",
+    "No uses formas neutras o demasiado formales como \"aquí\", \"indíqueme\", \"podría\", \"de acuerdo\".",
+    "",
+    "Identidad y estilo:",
+    "- Siempre hablás en primera persona como Fer.",
+    "- Tuteás al cliente de forma natural, cercana y profesional.",
+    "- Sonás humano, ágil y conversacional; nunca robótico, frío ni genérico.",
+    "- Escribís como en WhatsApp: claro, breve, amable y directo.",
+    "- No usás tecnicismos innecesarios.",
+    "- No saturás con información; das contexto justo y útil.",
+    "- No repetís frases ni saludos de forma mecánica.",
+    "",
+    "Objetivo comercial:",
+    "- Detectá rápido qué quiere el cliente, qué problema tiene, qué duda lo frena y qué tan listo está para avanzar.",
+    "- Guiás la conversación para que el cliente llegue a una decisión con menos fricción.",
+    "- Si ves interés real, avanzá con seguridad hacia el cierre o la captura de datos.",
+    "- Si el cliente duda, no presiones: aclará, simplificá y reducí incertidumbre.",
+    "",
+    "Psicología de venta aplicada de forma ética:",
+    "- Generá confianza primero, venta después.",
+    "- Hacé preguntas cortas y útiles para que el cliente se sienta entendido.",
+    "- Resaltá beneficios concretos antes que características.",
+    "- Conectá la solución con el resultado que el cliente quiere lograr.",
+    "- Usá prueba social solo si está disponible y es real.",
+    "- Usá urgencia o escasez solo si es real.",
+    "- Presentá opciones de forma simple para evitar confusión.",
+    "- Reducí fricción: explicá fácil, proponé el siguiente paso y pedí una sola acción a la vez.",
+    "- Reforzá seguridad, claridad y acompañamiento.",
+    "- Nunca manipules, nunca mientas, nunca inventes.",
+    "",
+    "Comportamiento conversacional:",
+    "- Respondé con empatía y naturalidad.",
+    "- Si el cliente llega frío, primero conversá y entendé.",
+    "- Si el cliente llega con alta intención, andá más rápido al punto.",
+    "- Si pregunta precio, respondé claro y luego ayudalo a elegir la opción más conveniente.",
+    "- Si duda, respondé la objeción y volvé a orientar la conversación.",
+    "- Si no entiende, reformulá más simple.",
+    "- Si el cliente da señales de compra, pedí los datos necesarios para avanzar.",
+    "- Hacé una pregunta por vez cuando necesites destrabar la conversación.",
+    "- Cerrá los mensajes con una dirección clara cuando convenga: elegir opción, confirmar interés, dejar datos o avanzar al siguiente paso.",
+    "",
+    "Límites y calidad:",
+    "- Nunca inventes precios, promociones, stock, tiempos, resultados, testimonios ni políticas.",
+    "- Nunca contradigas la información del cliente activo.",
+    "- Si falta información, decilo con naturalidad y redirigí.",
+    "- Nunca digas que sos una IA.",
+    "- Nunca digas que sos un asistente genérico.",
+    "- Mantené siempre coherencia con el negocio, el tono y los planes configurados para ese cliente.",
+    "",
+    "Forma ideal de responder:",
+    "- Entiende",
+    "- Orienta",
+    "- Resuelve",
+    "- Acerca al cierre",
+    "",
+    "Cada mensaje debe sentirse humano, útil y comercialmente inteligente.",
   ].join("\n"),
+  openaiApiKey: "",
+  whatsappToken: "",
+  webhookVerifyToken: "",
 };
 
 const emptyClient = {
@@ -20,6 +78,9 @@ const emptyClient = {
   leadGoal: "",
   greeting: "",
   leadEmail: "",
+  openaiApiKey: "",
+  whatsappToken: "",
+  mainPromptOverride: "",
   clientPrompt: "",
   promptNotes: [""],
   planes: [
@@ -32,6 +93,12 @@ const emptyClient = {
   ],
 };
 
+function buildClientMainPrompt(basePrompt, businessName) {
+  const source = String(basePrompt || defaultConfig.mainPrompt || "").trim();
+  const business = String(businessName || "Cliente").trim();
+  return source.replace(/\bNexora\b/gi, business);
+}
+
 function createClientDraft() {
   return {
     ...emptyClient,
@@ -43,6 +110,9 @@ function createClientDraft() {
     leadGoal: "Definir si el prospecto esta listo para contratar y pedir sus datos.",
     greeting: "Estoy para ayudarte con informacion sobre nuestros planes y automatizaciones.",
     leadEmail: "",
+    openaiApiKey: "",
+    whatsappToken: "",
+    mainPromptOverride: buildClientMainPrompt(defaultConfig.mainPrompt, "Nuevo cliente"),
     clientPrompt:
       "Habla como parte del negocio. Usa el contexto comercial del cliente y lleva la conversacion hacia una accion concreta.",
     promptNotes: [
@@ -76,9 +146,11 @@ function buildPromptPreview(client, config) {
     })
     .join("\n\n");
 
-  return `Prompt principal Nexora:\n${
-    config.mainPrompt || "Sin prompt principal"
-  }\n\nAsistente: ${client.assistantName || "Fer"}\nMarca: ${
+  const effectiveMainPrompt = client.mainPromptOverride || config.mainPrompt || "Sin prompt principal";
+
+  return `Prompt principal efectivo:\n${effectiveMainPrompt}\n\nAsistente: ${
+    client.assistantName || "Fer"
+  }\nMarca: ${
     client.businessName || client.nombre || "Cliente"
   }\nTono: ${client.tono || "Sin definir"}\n\nDescripcion:\n${
     client.businessDescription || "Sin descripcion"
@@ -86,7 +158,7 @@ function buildPromptPreview(client, config) {
     client.greeting || "Sin saludo"
   }\n\nEmail de leads:\n${
     client.leadEmail || "Sin email definido"
-  }\n\nPrompt especifico del cliente:\n${
+  }\n\nInstrucciones adicionales del cliente:\n${
     client.clientPrompt || "Sin instrucciones extra"
   }\n\nReglas:\n${
     notes.length ? notes.map((item) => `- ${item}`).join("\n") : "- Sin reglas"
@@ -101,7 +173,16 @@ function App() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingGlobal, setSavingGlobal] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
+  const [showGlobalSettings, setShowGlobalSettings] = useState(false);
+  const [healthChecks, setHealthChecks] = useState({
+    openaiConfigured: false,
+    whatsappConfigured: false,
+    spreadsheetConfigured: false,
+    resendConfigured: false,
+    webhookVerifyTokenConfigured: true,
+  });
   const deferredSearch = useDeferredValue(search);
 
   useEffect(() => {
@@ -132,15 +213,29 @@ function App() {
 
       const clientsData = await clientsResponse.json();
       const configData = await configResponse.json();
+      let nextChecks = healthChecks;
       const list = Array.isArray(clientsData.clientes) ? clientsData.clientes : [];
       const nextConfig =
         configData?.config && typeof configData.config === "object"
           ? { ...defaultConfig, ...configData.config }
           : defaultConfig;
 
+      try {
+        const healthResponse = await fetch("/api/health");
+
+        if (healthResponse.ok) {
+          const healthData = await healthResponse.json();
+          nextChecks =
+            healthData?.checks && typeof healthData.checks === "object"
+              ? healthData.checks
+              : nextChecks;
+        }
+      } catch {}
+
       startTransition(() => {
         setClients(list);
         setConfig(nextConfig);
+        setHealthChecks(nextChecks);
 
         const preferredId = nextSelectedId || selectedId || list[0]?.id || "";
         const current =
@@ -159,6 +254,7 @@ function App() {
   }
 
   function selectClient(client) {
+    setShowGlobalSettings(false);
     setSelectedId(client.id);
     setDraft(structuredClone(client));
   }
@@ -171,6 +267,16 @@ function App() {
         field === "nombre" && (!current.businessName || current.businessName === current.nombre)
           ? value
           : current.businessName,
+    }));
+  }
+
+  function applyBasePromptToDraft() {
+    setDraft((current) => ({
+      ...current,
+      mainPromptOverride: buildClientMainPrompt(
+        config.mainPrompt,
+        current.businessName || current.nombre || "Cliente"
+      ),
     }));
   }
 
@@ -289,39 +395,63 @@ function App() {
       const method = editingExistingClient ? "PUT" : "POST";
       const url = editingExistingClient ? `/api/clientes/${selectedId}` : "/api/clientes";
 
-      const [configResponse, clientResponse] = await Promise.all([
-        fetch("/api/config", {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(config),
-        }),
-        fetch(url, {
-          method,
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(draft),
-        }),
-      ]);
+      const clientResponse = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(draft),
+      });
 
-      if (!configResponse.ok || !clientResponse.ok) {
-        throw new Error("save_failed");
+      if (!clientResponse.ok) {
+        const errorData = await clientResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || "save_failed");
       }
 
-      const configData = await configResponse.json();
       const clientData = await clientResponse.json();
+      setShowGlobalSettings(false);
+      setStatusMessage("Cliente guardado.");
+      await loadData(clientData.cliente.id);
+    } catch (error) {
+      setStatusMessage(error.message === "save_failed" ? "No se pudo guardar." : error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveGlobalConfig() {
+    setSavingGlobal(true);
+
+    try {
+      const response = await fetch("/api/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(config),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "save_config_failed");
+      }
+
+      const configData = await response.json();
       setConfig({
         ...defaultConfig,
         ...(configData.config || {}),
       });
-      setStatusMessage("Configuracion guardada.");
-      await loadData(clientData.cliente.id);
+      setShowGlobalSettings(false);
+      setStatusMessage("Configuracion global guardada.");
+      await loadData(selectedId);
     } catch (error) {
-      setStatusMessage("No se pudo guardar.");
+      setStatusMessage(
+        error.message === "save_config_failed"
+          ? "No se pudo guardar la configuracion global."
+          : error.message
+      );
     } finally {
-      setSaving(false);
+      setSavingGlobal(false);
     }
   }
 
@@ -357,6 +487,7 @@ function App() {
 
   function createClient() {
     const nextClient = createClientDraft();
+    setShowGlobalSettings(false);
     setSelectedId(nextClient.id);
     setDraft(nextClient);
   }
@@ -390,11 +521,14 @@ function App() {
         </div>
 
         <div className="topbar-actions">
+          <button className="ghost-button" onClick={() => setShowGlobalSettings(true)}>
+            Webhook global
+          </button>
           <button className="secondary-button" onClick={createClient}>
             Nuevo cliente
           </button>
           <button className="primary-button" onClick={saveDraft} disabled={saving}>
-            {saving ? "Guardando..." : "Guardar cambios"}
+            {saving ? "Guardando..." : "Guardar cliente"}
           </button>
         </div>
       </header>
@@ -445,22 +579,82 @@ function App() {
 
         <section className="editor">
           <div className="editor-grid">
+            <article className="card form-card info-card">
+              <span className="section-kicker">Importante</span>
+              <p>
+                El prompt principal grande ahora se guarda por cliente en esta pantalla.
+              </p>
+              <p>
+                La `OpenAI API Key` y el `WhatsApp Token` ahora se guardan por cliente. El
+                `Webhook Verify Token` se edita desde `Webhook global`.
+              </p>
+            </article>
+
             <article className="card form-card">
               <div className="section-header">
                 <div>
-                  <span className="section-kicker">Nexora</span>
-                  <h2>Prompt principal</h2>
+                  <span className="section-kicker">Cliente activo</span>
+                  <h2>Credenciales del cliente</h2>
                 </div>
+              </div>
+
+              <div className="form-grid">
+                <label className="field field-full">
+                  <span>OpenAI API Key del cliente</span>
+                  <input
+                    type="password"
+                    value={draft.openaiApiKey || ""}
+                    onChange={(event) => updateField("openaiApiKey", event.target.value)}
+                    placeholder="sk-..."
+                    autoComplete="off"
+                  />
+                  <small className="field-hint">
+                    Va por cliente. Si la dejas vacia, usa la API key global de Nexora.
+                  </small>
+                </label>
+                <label className="field field-full">
+                  <span>WhatsApp Token del cliente</span>
+                  <input
+                    type="password"
+                    value={draft.whatsappToken || ""}
+                    onChange={(event) => updateField("whatsappToken", event.target.value)}
+                    placeholder="EAAG..."
+                    autoComplete="off"
+                  />
+                  <small className="field-hint">
+                    Pega aca el token `EAAG...` o `EAAX...` de Meta para este cliente. No va en
+                    `Webhook global`.
+                  </small>
+                  <small className="field-hint">
+                    Si arranca con `nexora_`, esta mal pegado: eso corresponde al webhook global.
+                  </small>
+                </label>
+              </div>
+            </article>
+
+            <article className="card form-card">
+              <div className="section-header">
+                <div>
+                  <span className="section-kicker">Cliente activo</span>
+                  <h2>Prompt principal del cliente</h2>
+                </div>
+                <button className="ghost-button" onClick={applyBasePromptToDraft}>
+                  Cargar base Nexora
+                </button>
               </div>
 
               <div className="stack">
                 <label className="field">
-                  <span>Prompt maestro de Nexora</span>
+                  <span>Prompt principal de este cliente</span>
                   <textarea
-                    rows="8"
-                    value={config.mainPrompt}
-                    onChange={(event) => updateConfigField("mainPrompt", event.target.value)}
+                    rows="10"
+                    value={draft.mainPromptOverride || ""}
+                    onChange={(event) => updateField("mainPromptOverride", event.target.value)}
                   />
+                  <small className="field-hint">
+                    Se guarda solo en este cliente. Si lo dejas vacio, usa el prompt global de
+                    Nexora.
+                  </small>
                 </label>
               </div>
             </article>
@@ -545,12 +739,15 @@ function App() {
                   </small>
                 </label>
                 <label className="field field-full">
-                  <span>Prompt especifico del cliente</span>
+                  <span>Instrucciones adicionales del cliente</span>
                   <textarea
-                    rows="6"
+                    rows="5"
                     value={draft.clientPrompt}
                     onChange={(event) => updateField("clientPrompt", event.target.value)}
                   />
+                  <small className="field-hint">
+                    Este bloque complementa el prompt principal de este cliente.
+                  </small>
                 </label>
               </div>
             </article>
@@ -689,6 +886,61 @@ function App() {
           </article>
         </aside>
       </main>
+
+      {showGlobalSettings ? (
+        <div className="modal-overlay" onClick={() => setShowGlobalSettings(false)}>
+          <div className="modal-card card" onClick={(event) => event.stopPropagation()}>
+            <div className="section-header">
+              <div>
+                <span className="section-kicker">Global</span>
+                <h2>Webhook global de Nexora</h2>
+              </div>
+              <button className="ghost-button" onClick={() => setShowGlobalSettings(false)}>
+                Cerrar
+              </button>
+            </div>
+
+            <div className="form-grid">
+              <label className="field field-full">
+                <span>Webhook Verify Token global</span>
+                <input
+                  value={config.webhookVerifyToken}
+                  onChange={(event) => updateConfigField("webhookVerifyToken", event.target.value)}
+                  placeholder="nexora_2026_secure"
+                  autoComplete="off"
+                />
+                <small className="field-hint">
+                  Tiene que coincidir exactamente con el token configurado en Meta. No pegues aca
+                  el token `EAAG...` de WhatsApp.
+                </small>
+                <small className="field-hint">
+                  Este campo suele verse como `nexora_2026_secure`, no como `EAAG...`.
+                </small>
+              </label>
+            </div>
+
+            <div className="stack">
+              <small className="field-hint">
+                Estado runtime: OpenAI {healthChecks.openaiConfigured ? "ok" : "faltante"} |
+                WhatsApp {healthChecks.whatsappConfigured ? "ok" : "faltante"} | Verify token{" "}
+                {healthChecks.webhookVerifyTokenConfigured ? "ok" : "faltante"}
+              </small>
+              <small className="field-hint">
+                Este modal ahora se usa solo para el `Webhook Verify Token` global de Nexora.
+              </small>
+            </div>
+
+            <div className="topbar-actions">
+              <button className="ghost-button" onClick={() => setShowGlobalSettings(false)}>
+                Cancelar
+              </button>
+              <button className="primary-button" onClick={saveGlobalConfig} disabled={savingGlobal}>
+                {savingGlobal ? "Guardando..." : "Guardar Nexora"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

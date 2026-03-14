@@ -23,22 +23,17 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    })
-  : null;
-
 const historial = {};
 const mensajesProcesados = new Set();
 const leadsEnviados = new Set();
 
-const VERIFY_TOKEN = "nexora_2026_secure";
+const DEFAULT_VERIFY_TOKEN = "nexora_2026_secure";
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const DEFAULT_LEAD_EMAIL = "contactonexora16@gmail.com";
 const DIST_DIR = path.join(__dirname, "dist");
 const DIST_INDEX = path.join(DIST_DIR, "index.html");
 let sheets = null;
+const openaiClients = new Map();
 
 if (SPREADSHEET_ID) {
   const auth = new google.auth.GoogleAuth({
@@ -70,17 +65,25 @@ function buildPlanesText(cliente) {
     .join("\n\n");
 }
 
+function buildClientMainPrompt(basePrompt, cliente) {
+  const businessName = String(cliente?.businessName || cliente?.nombre || "Cliente").trim();
+  return String(basePrompt || "").replace(/\bNexora\b/gi, businessName).trim();
+}
+
 function buildSystemPrompt(cliente, config) {
   const promptNotes = Array.isArray(cliente.promptNotes) && cliente.promptNotes.length
     ? cliente.promptNotes.map((note) => `- ${note}`).join("\n")
     : "- Responde de forma clara, breve y natural.";
 
   const globalPrompt = String(config?.mainPrompt || "").trim();
+  const effectiveMainPrompt = String(
+    cliente?.mainPromptOverride || buildClientMainPrompt(globalPrompt, cliente)
+  ).trim();
   const clientPrompt = String(cliente.clientPrompt || "").trim();
 
   return `
 PROMPT PRINCIPAL NEXORA:
-${globalPrompt || "Sos el operador principal de Nexora."}
+${effectiveMainPrompt || "Sos el operador principal de Nexora."}
 
 CONTEXTO DEL CLIENTE:
 Tu nombre es ${cliente.assistantName || "Fer"}.
@@ -128,6 +131,62 @@ lead_calificado = true
 Planes disponibles:
 ${buildPlanesText(cliente)}
 `.trim();
+}
+
+function resolveVerifyToken(config = getConfig()) {
+  return String(
+    process.env.WEBHOOK_VERIFY_TOKEN || config?.webhookVerifyToken || DEFAULT_VERIFY_TOKEN
+  ).trim();
+}
+
+function resolveOpenAIApiKey(config = getConfig()) {
+  return String(process.env.OPENAI_API_KEY || config?.openaiApiKey || "").trim();
+}
+
+function resolveWhatsappToken(config = getConfig()) {
+  return String(process.env.WHATSAPP_TOKEN || config?.whatsappToken || "").trim();
+}
+
+function resolveClientOpenAIApiKey(cliente, config = getConfig()) {
+  return String(cliente?.openaiApiKey || resolveOpenAIApiKey(config) || "").trim();
+}
+
+function resolveClientWhatsappToken(cliente, config = getConfig()) {
+  return String(cliente?.whatsappToken || resolveWhatsappToken(config) || "").trim();
+}
+
+function getOpenAIClient(apiKey) {
+  if (!apiKey) {
+    return null;
+  }
+
+  if (!openaiClients.has(apiKey)) {
+    openaiClients.set(
+      apiKey,
+      new OpenAI({
+        apiKey,
+      })
+    );
+  }
+
+  return openaiClients.get(apiKey);
+}
+
+function getRuntimeStatus(config = getConfig()) {
+  const anyClientOpenAIConfigured = listClientes().some((cliente) =>
+    Boolean(String(cliente?.openaiApiKey || "").trim())
+  );
+  const anyClientWhatsappConfigured = listClientes().some((cliente) =>
+    Boolean(String(cliente?.whatsappToken || "").trim())
+  );
+
+  return {
+    openaiConfigured: Boolean(resolveOpenAIApiKey(config)) || anyClientOpenAIConfigured,
+    whatsappConfigured: Boolean(resolveWhatsappToken(config)) || anyClientWhatsappConfigured,
+    spreadsheetConfigured: Boolean(SPREADSHEET_ID),
+    resendConfigured: Boolean(resend),
+    webhookVerifyTokenConfigured: Boolean(resolveVerifyToken(config)),
+  };
 }
 
 async function guardarLead(nombre, telefono, rubro, interes) {
@@ -180,7 +239,7 @@ Presupuesto: ${presupuesto || "No informado"}
   }
 }
 
-async function responderWhatsapp(phoneNumberId, to, body) {
+async function responderWhatsapp(phoneNumberId, to, body, whatsappToken) {
   await axios.post(
     `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
     {
@@ -190,7 +249,7 @@ async function responderWhatsapp(phoneNumberId, to, body) {
     },
     {
       headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+        Authorization: `Bearer ${whatsappToken}`,
         "Content-Type": "application/json",
       },
     }
@@ -198,9 +257,12 @@ async function responderWhatsapp(phoneNumberId, to, body) {
 }
 
 app.get("/api/health", (req, res) => {
+  const config = getConfig();
+
   res.json({
     ok: true,
     message: "Servidor NEXORA funcionando",
+    checks: getRuntimeStatus(config),
   });
 });
 
@@ -279,8 +341,9 @@ app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
+  const verifyToken = resolveVerifyToken();
 
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+  if (mode === "subscribe" && token === verifyToken) {
     return res.status(200).send(challenge);
   }
 
@@ -289,10 +352,7 @@ app.get("/webhook", (req, res) => {
 
 app.post("/webhook", async (req, res) => {
   try {
-    if (!openai) {
-      console.error("OPENAI_API_KEY no configurada");
-      return res.status(503).json({ error: "OpenAI no configurado" });
-    }
+    const config = getConfig();
 
     const body = req.body;
 
@@ -324,11 +384,24 @@ app.post("/webhook", async (req, res) => {
     const mensaje = messageData.text.body;
     const phoneNumberId = value.metadata.phone_number_id;
     const cliente = getCliente(phoneNumberId);
-    const config = getConfig();
 
     if (!cliente) {
       console.log("Cliente no configurado para phoneNumberId:", phoneNumberId);
       return res.sendStatus(200);
+    }
+
+    const openaiApiKey = resolveClientOpenAIApiKey(cliente, config);
+    const whatsappToken = resolveClientWhatsappToken(cliente, config);
+    const openai = getOpenAIClient(openaiApiKey);
+
+    if (!openai) {
+      console.error("OPENAI_API_KEY no configurada para cliente:", cliente.id);
+      return res.status(503).json({ error: "OpenAI no configurado" });
+    }
+
+    if (!whatsappToken) {
+      console.error("WHATSAPP_TOKEN no configurado para cliente:", cliente.id);
+      return res.status(503).json({ error: "WhatsApp no configurado" });
     }
 
     if (!historial[from]) {
@@ -422,7 +495,7 @@ app.post("/webhook", async (req, res) => {
       historial[from] = historial[from].slice(-6);
     }
 
-    await responderWhatsapp(phoneNumberId, from, mensajeFinal);
+    await responderWhatsapp(phoneNumberId, from, mensajeFinal, whatsappToken);
 
     return res.sendStatus(200);
   } catch (error) {

@@ -45,7 +45,7 @@
     "appId": "com.nexora.desktop",
     "productName": "Nexora",
     "artifactName": "${productName}-Setup-${version}.${ext}",
-    "executableName": "electron",
+    "executableName": "Nexora",
     "afterExtract": "electron/ensure-electron-exe.js",
     "afterPack": "electron/ensure-electron-exe.js",
     "directories": {
