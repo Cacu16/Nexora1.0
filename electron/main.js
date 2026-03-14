@@ -59,6 +59,8 @@ function startServerIfNeeded() {
     return;
   }
 
+  process.env.NEXORA_DATA_DIR = path.join(app.getPath("userData"), "data");
+
   const { startServer } = require("../server");
   startedServer = startServer(serverPort);
   writeLog(`Servidor desktop iniciado en ${serverPort}`);
