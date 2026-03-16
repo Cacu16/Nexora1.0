@@ -67,6 +67,15 @@ const defaultConfig = {
   webhookVerifyToken: "",
 };
 
+const defaultClientRuntime = {
+  phoneNumberId: "",
+  phoneNumberIdConfigured: false,
+  openaiConfigured: false,
+  whatsappConfigured: false,
+  leadEmailConfigured: true,
+  ready: false,
+};
+
 const emptyClient = {
   id: "",
   nombre: "",
@@ -91,7 +100,69 @@ const emptyClient = {
       beneficios: [""],
     },
   ],
+  runtime: defaultClientRuntime,
 };
+
+function isValidPhoneNumberId(value) {
+  return /^\d+$/.test(String(value || "").trim());
+}
+
+function getClientRuntime(client, config = defaultConfig) {
+  const runtime = client?.runtime && typeof client.runtime === "object" ? client.runtime : {};
+  const phoneNumberId = String(runtime.phoneNumberId || client?.id || "").trim();
+  const phoneNumberIdConfigured =
+    "phoneNumberIdConfigured" in runtime
+      ? Boolean(runtime.phoneNumberIdConfigured)
+      : isValidPhoneNumberId(phoneNumberId);
+  const openaiConfigured =
+    "openaiConfigured" in runtime
+      ? Boolean(runtime.openaiConfigured)
+      : Boolean(String(client?.openaiApiKey || config?.openaiApiKey || "").trim());
+  const whatsappConfigured =
+    "whatsappConfigured" in runtime
+      ? Boolean(runtime.whatsappConfigured)
+      : Boolean(String(client?.whatsappToken || config?.whatsappToken || "").trim());
+  const leadEmailConfigured =
+    "leadEmailConfigured" in runtime
+      ? Boolean(runtime.leadEmailConfigured)
+      : true;
+
+  return {
+    ...defaultClientRuntime,
+    ...runtime,
+    phoneNumberId,
+    phoneNumberIdConfigured,
+    openaiConfigured,
+    whatsappConfigured,
+    leadEmailConfigured,
+    ready: phoneNumberIdConfigured && openaiConfigured && whatsappConfigured,
+  };
+}
+
+function decorateClient(client, config = defaultConfig) {
+  return {
+    ...client,
+    runtime: getClientRuntime(client, config),
+  };
+}
+
+function getClientIssues(runtime) {
+  const issues = [];
+
+  if (!runtime.phoneNumberIdConfigured) {
+    issues.push("Falta el Phone Number ID numerico real de Meta para enrutar el webhook.");
+  }
+
+  if (!runtime.openaiConfigured) {
+    issues.push("Falta una OpenAI API Key para este cliente o a nivel global.");
+  }
+
+  if (!runtime.whatsappConfigured) {
+    issues.push("Falta el WhatsApp Token de Meta para este cliente o a nivel global.");
+  }
+
+  return issues;
+}
 
 function buildClientMainPrompt(basePrompt, businessName) {
   const source = String(basePrompt || defaultConfig.mainPrompt || "").trim();
@@ -99,8 +170,8 @@ function buildClientMainPrompt(basePrompt, businessName) {
   return source.replace(/\bNexora\b/gi, business);
 }
 
-function createClientDraft() {
-  return {
+function createClientDraft(baseConfig = defaultConfig) {
+  return decorateClient({
     ...emptyClient,
     id: `cliente-${Date.now()}`,
     nombre: "Nuevo cliente",
@@ -112,7 +183,7 @@ function createClientDraft() {
     leadEmail: "",
     openaiApiKey: "",
     whatsappToken: "",
-    mainPromptOverride: buildClientMainPrompt(defaultConfig.mainPrompt, "Nuevo cliente"),
+    mainPromptOverride: buildClientMainPrompt(baseConfig.mainPrompt, "Nuevo cliente"),
     clientPrompt:
       "Habla como parte del negocio. Usa el contexto comercial del cliente y lleva la conversacion hacia una accion concreta.",
     promptNotes: [
@@ -128,7 +199,7 @@ function createClientDraft() {
         beneficios: ["Define el primer beneficio del plan"],
       },
     ],
-  };
+  }, baseConfig);
 }
 
 function buildPromptPreview(client, config) {
@@ -184,6 +255,25 @@ function App() {
     webhookVerifyTokenConfigured: true,
   });
   const deferredSearch = useDeferredValue(search);
+  const draftRuntime = getClientRuntime(draft, config);
+  const normalizedDraftId = String(draft.id || "").trim();
+  const duplicatePhoneNumberId = clients.some(
+    (client) => client.id === normalizedDraftId && client.id !== selectedId
+  );
+  const draftIssues = [
+    ...getClientIssues(draftRuntime),
+    ...(duplicatePhoneNumberId
+      ? ["Ese Phone Number ID ya pertenece a otro cliente. Tiene que ser unico."]
+      : []),
+  ];
+
+  function syncClient(client, nextConfig = config) {
+    return decorateClient(client, nextConfig);
+  }
+
+  function updateDraft(updater) {
+    setDraft((current) => syncClient(typeof updater === "function" ? updater(current) : updater));
+  }
 
   useEffect(() => {
     loadData();
@@ -213,12 +303,14 @@ function App() {
 
       const clientsData = await clientsResponse.json();
       const configData = await configResponse.json();
-      let nextChecks = healthChecks;
-      const list = Array.isArray(clientsData.clientes) ? clientsData.clientes : [];
       const nextConfig =
         configData?.config && typeof configData.config === "object"
           ? { ...defaultConfig, ...configData.config }
           : defaultConfig;
+      let nextChecks = healthChecks;
+      const list = Array.isArray(clientsData.clientes)
+        ? clientsData.clientes.map((client) => syncClient(client, nextConfig))
+        : [];
 
       try {
         const healthResponse = await fetch("/api/health");
@@ -241,10 +333,10 @@ function App() {
         const current =
           list.find((client) => client.id === preferredId) ||
           list[0] ||
-          createClientDraft();
+          createClientDraft(nextConfig);
 
         setSelectedId(current.id || "");
-        setDraft(structuredClone(current));
+        setDraft(structuredClone(syncClient(current, nextConfig)));
       });
     } catch (error) {
       setStatusMessage("No se pudo cargar la configuracion.");
@@ -256,11 +348,11 @@ function App() {
   function selectClient(client) {
     setShowGlobalSettings(false);
     setSelectedId(client.id);
-    setDraft(structuredClone(client));
+    setDraft(structuredClone(syncClient(client)));
   }
 
   function updateField(field, value) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       [field]: value,
       businessName:
@@ -271,7 +363,7 @@ function App() {
   }
 
   function applyBasePromptToDraft() {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       mainPromptOverride: buildClientMainPrompt(
         config.mainPrompt,
@@ -281,14 +373,17 @@ function App() {
   }
 
   function updateConfigField(field, value) {
-    setConfig((current) => ({
-      ...current,
+    const nextConfig = {
+      ...config,
       [field]: value,
-    }));
+    };
+
+    setConfig(nextConfig);
+    setDraft((current) => syncClient(current, nextConfig));
   }
 
   function updatePromptNote(index, value) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       promptNotes: current.promptNotes.map((item, itemIndex) =>
         itemIndex === index ? value : item
@@ -297,14 +392,14 @@ function App() {
   }
 
   function addPromptNote() {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       promptNotes: [...current.promptNotes, ""],
     }));
   }
 
   function removePromptNote(index) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       promptNotes:
         current.promptNotes.length === 1
@@ -314,7 +409,7 @@ function App() {
   }
 
   function updatePlan(index, field, value) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       planes: current.planes.map((plan, planIndex) =>
         planIndex === index ? { ...plan, [field]: value } : plan
@@ -323,7 +418,7 @@ function App() {
   }
 
   function addPlan() {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       planes: [
         ...current.planes,
@@ -333,7 +428,7 @@ function App() {
   }
 
   function removePlan(index) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       planes:
         current.planes.length === 1
@@ -343,7 +438,7 @@ function App() {
   }
 
   function updateBenefit(planIndex, benefitIndex, value) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       planes: current.planes.map((plan, index) =>
         index === planIndex
@@ -357,7 +452,7 @@ function App() {
   }
 
   function addBenefit(planIndex) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       planes: current.planes.map((plan, index) =>
         index === planIndex
@@ -371,7 +466,7 @@ function App() {
   }
 
   function removeBenefit(planIndex, benefitIndex) {
-    setDraft((current) => ({
+    updateDraft((current) => ({
       ...current,
       planes: current.planes.map((plan, index) =>
         index === planIndex
@@ -388,6 +483,16 @@ function App() {
   }
 
   async function saveDraft() {
+    if (!normalizedDraftId) {
+      setStatusMessage("Cada cliente necesita un Phone Number ID para poder guardarse.");
+      return;
+    }
+
+    if (duplicatePhoneNumberId) {
+      setStatusMessage("Ese Phone Number ID ya esta asignado a otro cliente.");
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -486,7 +591,7 @@ function App() {
   }
 
   function createClient() {
-    const nextClient = createClientDraft();
+    const nextClient = createClientDraft(config);
     setShowGlobalSettings(false);
     setSelectedId(nextClient.id);
     setDraft(nextClient);
@@ -527,7 +632,11 @@ function App() {
           <button className="secondary-button" onClick={createClient}>
             Nuevo cliente
           </button>
-          <button className="primary-button" onClick={saveDraft} disabled={saving}>
+          <button
+            className="primary-button"
+            onClick={saveDraft}
+            disabled={saving || !normalizedDraftId || duplicatePhoneNumberId}
+          >
             {saving ? "Guardando..." : "Guardar cliente"}
           </button>
         </div>
@@ -562,12 +671,13 @@ function App() {
                   className={`client-card ${selectedId === client.id ? "active" : ""}`}
                   onClick={() => selectClient(client)}
                 >
-                  <div>
+                  <div className="client-meta">
                     <strong>{client.nombre}</strong>
                     <span>{client.id}</span>
+                    <span>{client.estado}</span>
                   </div>
-                  <span className={`status-tag ${client.estado === "Activo" ? "online" : "draft"}`}>
-                    {client.estado}
+                  <span className={`status-tag ${client.runtime?.ready ? "online" : "draft"}`}>
+                    {client.runtime?.ready ? "Conectado" : "Incompleto"}
                   </span>
                 </button>
               ))
@@ -582,12 +692,51 @@ function App() {
             <article className="card form-card info-card">
               <span className="section-kicker">Importante</span>
               <p>
-                El prompt principal grande ahora se guarda por cliente en esta pantalla.
+                Cada cliente mantiene su propio guardado, sus credenciales y su historial aislado.
               </p>
               <p>
-                La `OpenAI API Key` y el `WhatsApp Token` ahora se guardan por cliente. El
-                `Webhook Verify Token` se edita desde `Webhook global`.
+                Nexora solo puede responder por separado si cada cliente tiene su `Phone Number ID`
+                real de Meta y un token valido por cliente o global.
               </p>
+            </article>
+
+            <article className="card form-card">
+              <div className="section-header">
+                <div>
+                  <span className="section-kicker">Estado operativo</span>
+                  <h2>Conexion del cliente</h2>
+                </div>
+                <span className={`pill ${draftIssues.length ? "" : "accent"}`}>
+                  {draftIssues.length ? "Faltan datos" : "Listo para responder"}
+                </span>
+              </div>
+
+              <div className="status-checks">
+                <div className={`status-summary ${draftRuntime.phoneNumberIdConfigured ? "ready" : "warn"}`}>
+                  Phone Number ID {draftRuntime.phoneNumberIdConfigured ? "ok" : "faltante"}
+                </div>
+                <div className={`status-summary ${draftRuntime.openaiConfigured ? "ready" : "warn"}`}>
+                  OpenAI {draftRuntime.openaiConfigured ? "ok" : "faltante"}
+                </div>
+                <div className={`status-summary ${draftRuntime.whatsappConfigured ? "ready" : "warn"}`}>
+                  WhatsApp {draftRuntime.whatsappConfigured ? "ok" : "faltante"}
+                </div>
+              </div>
+
+              <div className="stack">
+                {draftIssues.length ? (
+                  draftIssues.map((issue) => (
+                    <small className="field-hint field-error" key={issue}>
+                      {issue}
+                    </small>
+                  ))
+                ) : (
+                  <small className="field-hint field-success">
+                    Este cliente ya tiene lo necesario para responder desde su webhook sin mezclar
+                    conversaciones con otros.
+                  </small>
+                )}
+              </div>
             </article>
 
             <article className="card form-card">
@@ -670,8 +819,23 @@ function App() {
 
               <div className="form-grid">
                 <label className="field">
-                  <span>Phone Number ID</span>
+                  <span>Phone Number ID de Meta</span>
                   <input value={draft.id} onChange={(event) => updateField("id", event.target.value)} />
+                  <small className="field-hint">
+                    Tiene que ser el `phone_number_id` numerico real de este cliente. No puede
+                    repetirse.
+                  </small>
+                  {duplicatePhoneNumberId ? (
+                    <small className="field-hint field-error">
+                      Ese Phone Number ID ya esta asignado a otro cliente.
+                    </small>
+                  ) : null}
+                  {!draftRuntime.phoneNumberIdConfigured ? (
+                    <small className="field-hint field-error">
+                      Mientras siga como `cliente-...` o tenga letras, este cliente no va a recibir
+                      mensajes del webhook.
+                    </small>
+                  ) : null}
                 </label>
                 <label className="field">
                   <span>Estado</span>

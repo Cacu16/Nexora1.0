@@ -7,6 +7,8 @@
     "dev": "concurrently \"node server.js\" \"vite\"",
     "dev:server": "node server.js",
     "dev:ui": "vite",
+    "dev:tunnel": "powershell -ExecutionPolicy Bypass -File scripts/start-localhostrun-tunnel.ps1",
+    "dev:whatsapp": "concurrently \"node server.js\" \"npm run dev:tunnel\"",
     "build": "vite build",
     "preview": "vite preview",
     "desktop:dev": "concurrently -k \"node server.js\" \"vite\" \"wait-on http://localhost:3000 http://localhost:5173 && cross-env ELECTRON_RUN_AS_NODE= ELECTRON_START_URL=http://localhost:5173 electron .\"",

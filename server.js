@@ -4,6 +4,7 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
+const nodemailer = require("nodemailer");
 const OpenAI = require("openai");
 const { google } = require("googleapis");
 const { Resend } = require("resend");
@@ -15,17 +16,17 @@ const {
   saveCliente,
 } = require("./lib/clientStore");
 const { getConfig, saveConfig } = require("./lib/configStore");
+const { getDataDir } = require("./lib/dataPaths");
 
 const app = express();
 let serverInstance = null;
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const smtpTransport = createEmailTransport();
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-const historial = {};
-const mensajesProcesados = new Set();
-const leadsEnviados = new Set();
+const clientRuntime = new Map();
 
 const DEFAULT_VERIFY_TOKEN = "nexora_2026_secure";
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
@@ -34,6 +35,58 @@ const DIST_DIR = path.join(__dirname, "dist");
 const DIST_INDEX = path.join(DIST_DIR, "index.html");
 let sheets = null;
 const openaiClients = new Map();
+
+function createEmailTransport() {
+  const smtpHost = String(process.env.SMTP_HOST || "").trim();
+  const smtpUser = String(process.env.SMTP_USER || "").trim();
+  const smtpPass = String(process.env.SMTP_PASS || "").trim();
+  const gmailUser = String(process.env.GMAIL_USER || "").trim();
+  const gmailAppPassword = String(process.env.GMAIL_APP_PASSWORD || "").trim();
+
+  if (smtpHost && smtpUser && smtpPass) {
+    return nodemailer.createTransport({
+      host: smtpHost,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: String(process.env.SMTP_SECURE || "").trim().toLowerCase() === "true",
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+    });
+  }
+
+  if (gmailUser && gmailAppPassword) {
+    return nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: gmailUser,
+        pass: gmailAppPassword,
+      },
+    });
+  }
+
+  return null;
+}
+
+function appendJsonl(fileName, payload) {
+  const targetFile = path.join(getDataDir(), fileName);
+  fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+  fs.appendFileSync(targetFile, `${JSON.stringify(payload)}\n`, "utf8");
+}
+
+function logWebhookEvent(payload) {
+  appendJsonl("webhook-events.jsonl", {
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+}
+
+function persistLeadEvent(payload) {
+  appendJsonl("lead-events.jsonl", {
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+}
 
 if (SPREADSHEET_ID) {
   const auth = new google.auth.GoogleAuth({
@@ -155,6 +208,76 @@ function resolveClientWhatsappToken(cliente, config = getConfig()) {
   return String(cliente?.whatsappToken || resolveWhatsappToken(config) || "").trim();
 }
 
+function isValidPhoneNumberId(value) {
+  return /^\d+$/.test(String(value || "").trim());
+}
+
+function getClientRuntimeState(clienteId) {
+  if (!clientRuntime.has(clienteId)) {
+    clientRuntime.set(clienteId, {
+      historialPorContacto: new Map(),
+      mensajesProcesados: new Set(),
+      leadsEnviados: new Set(),
+    });
+  }
+
+  return clientRuntime.get(clienteId);
+}
+
+function moveClientRuntimeState(previousId, nextId) {
+  if (!previousId || !nextId || previousId === nextId || !clientRuntime.has(previousId)) {
+    return;
+  }
+
+  const previousState = clientRuntime.get(previousId);
+
+  if (!clientRuntime.has(nextId)) {
+    clientRuntime.set(nextId, previousState);
+  }
+
+  clientRuntime.delete(previousId);
+}
+
+function clearClientRuntimeState(clienteId) {
+  if (!clienteId) {
+    return;
+  }
+
+  clientRuntime.delete(clienteId);
+}
+
+function getConversationHistory(runtimeState, contactId) {
+  if (!runtimeState.historialPorContacto.has(contactId)) {
+    runtimeState.historialPorContacto.set(contactId, []);
+  }
+
+  return runtimeState.historialPorContacto.get(contactId);
+}
+
+function buildClientStatus(cliente, config = getConfig()) {
+  const phoneNumberId = String(cliente?.id || "").trim();
+  const phoneNumberIdConfigured = isValidPhoneNumberId(phoneNumberId);
+  const openaiConfigured = Boolean(resolveClientOpenAIApiKey(cliente, config));
+  const whatsappConfigured = Boolean(resolveClientWhatsappToken(cliente, config));
+  const leadEmailConfigured = Boolean(String(cliente?.leadEmail || DEFAULT_LEAD_EMAIL).trim());
+
+  return {
+    phoneNumberId,
+    phoneNumberIdConfigured,
+    openaiConfigured,
+    whatsappConfigured,
+    leadEmailConfigured,
+    ready: phoneNumberIdConfigured && openaiConfigured && whatsappConfigured,
+  };
+}
+
+function serializeCliente(cliente, config = getConfig()) {
+  return {
+    ...cliente,
+    runtime: buildClientStatus(cliente, config),
+  };
+}
+
 function getOpenAIClient(apiKey) {
   if (!apiKey) {
     return null;
@@ -185,6 +308,8 @@ function getRuntimeStatus(config = getConfig()) {
     whatsappConfigured: Boolean(resolveWhatsappToken(config)) || anyClientWhatsappConfigured,
     spreadsheetConfigured: Boolean(SPREADSHEET_ID),
     resendConfigured: Boolean(resend),
+    smtpConfigured: Boolean(smtpTransport),
+    emailProviderConfigured: Boolean(resend || smtpTransport),
     webhookVerifyTokenConfigured: Boolean(resolveVerifyToken(config)),
   };
 }
@@ -212,30 +337,48 @@ async function guardarLead(nombre, telefono, rubro, interes) {
 }
 
 async function enviarEmailLead(cliente, to, nombre, telefono, interes, presupuesto) {
-  if (!resend) {
-    console.log("Resend no configurado, se omite envio de email");
-    return;
+  const businessLabel = cliente?.businessName || cliente?.nombre || "NEXORA";
+  const smtpFrom =
+    String(process.env.SMTP_FROM || "").trim() ||
+    String(process.env.GMAIL_USER || "").trim() ||
+    "contactonexora16@gmail.com";
+
+  if (!resend && !smtpTransport) {
+    console.log("No hay proveedor de email configurado, se omite envio de email");
+    return false;
   }
 
-  const businessLabel = cliente?.businessName || cliente?.nombre || "NEXORA";
-
   try {
-    await resend.emails.send({
-      from: "NEXORA <onboarding@resend.dev>",
-      to: [to],
-      subject: `Nuevo lead - ${businessLabel}`,
-      text: `
+    const subject = `Nuevo lead - ${businessLabel}`;
+    const text = `
 Cliente: ${businessLabel}
 Nombre: ${nombre || "No informado"}
 Telefono: ${telefono || "No informado"}
 Interes: ${interes || "No especificado"}
 Presupuesto: ${presupuesto || "No informado"}
-`,
-    });
+`;
+
+    if (resend) {
+      await resend.emails.send({
+        from: "NEXORA <onboarding@resend.dev>",
+        to: [to],
+        subject,
+        text,
+      });
+    } else {
+      await smtpTransport.sendMail({
+        from: `NEXORA <${smtpFrom}>`,
+        to,
+        subject,
+        text,
+      });
+    }
 
     console.log("Lead enviado por email");
+    return true;
   } catch (error) {
     console.error("Error enviando email:", error.response?.data || error.message || error);
+    return false;
   }
 }
 
@@ -258,17 +401,25 @@ async function responderWhatsapp(phoneNumberId, to, body, whatsappToken) {
 
 app.get("/api/health", (req, res) => {
   const config = getConfig();
+  const clientes = listClientes();
 
   res.json({
     ok: true,
     message: "Servidor NEXORA funcionando",
     checks: getRuntimeStatus(config),
+    clients: clientes.map((cliente) => ({
+      id: cliente.id,
+      nombre: cliente.nombre,
+      runtime: buildClientStatus(cliente, config),
+    })),
   });
 });
 
 app.get("/api/clientes", (req, res) => {
+  const config = getConfig();
+
   res.json({
-    clientes: listClientes(),
+    clientes: listClientes().map((cliente) => serializeCliente(cliente, config)),
   });
 });
 
@@ -280,18 +431,19 @@ app.get("/api/config", (req, res) => {
 
 app.get("/api/clientes/:id", (req, res) => {
   const cliente = getCliente(req.params.id);
+  const config = getConfig();
 
   if (!cliente) {
     return res.status(404).json({ error: "Cliente no encontrado" });
   }
 
-  return res.json({ cliente });
+  return res.json({ cliente: serializeCliente(cliente, config) });
 });
 
 app.post("/api/clientes", (req, res) => {
   try {
     const cliente = saveCliente(req.body);
-    return res.status(201).json({ cliente });
+    return res.status(201).json({ cliente: serializeCliente(cliente) });
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
@@ -315,13 +467,12 @@ app.put("/api/clientes/:id", (req, res) => {
     }
 
     const payload = normalizeCliente(req.body, req.params.id);
-
-    if (payload.id !== req.params.id) {
-      removeCliente(req.params.id);
-    }
-
+    const previousId = existing.id;
     const cliente = saveCliente(payload, req.params.id);
-    return res.json({ cliente });
+
+    moveClientRuntimeState(previousId, cliente.id);
+
+    return res.json({ cliente: serializeCliente(cliente) });
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
@@ -333,6 +484,8 @@ app.delete("/api/clientes/:id", (req, res) => {
   if (!deleted) {
     return res.status(404).json({ error: "Cliente no encontrado" });
   }
+
+  clearClientRuntimeState(req.params.id);
 
   return res.status(204).send();
 });
@@ -369,13 +522,6 @@ app.post("/webhook", async (req, res) => {
     const messageData = value.messages[0];
     const messageId = messageData.id;
 
-    if (mensajesProcesados.has(messageId)) {
-      console.log("Mensaje duplicado ignorado:", messageId);
-      return res.sendStatus(200);
-    }
-
-    mensajesProcesados.add(messageId);
-
     if (!messageData.text?.body) {
       return res.sendStatus(200);
     }
@@ -385,10 +531,29 @@ app.post("/webhook", async (req, res) => {
     const phoneNumberId = value.metadata.phone_number_id;
     const cliente = getCliente(phoneNumberId);
 
+    logWebhookEvent({
+      type: "incoming",
+      phoneNumberId,
+      clientId: cliente?.id || null,
+      from,
+      messageId,
+      text: mensaje,
+    });
+
     if (!cliente) {
       console.log("Cliente no configurado para phoneNumberId:", phoneNumberId);
       return res.sendStatus(200);
     }
+
+    const runtimeState = getClientRuntimeState(cliente.id);
+    const processedMessageKey = `${cliente.id}:${messageId}`;
+
+    if (runtimeState.mensajesProcesados.has(processedMessageKey)) {
+      console.log("Mensaje duplicado ignorado:", messageId);
+      return res.sendStatus(200);
+    }
+
+    runtimeState.mensajesProcesados.add(processedMessageKey);
 
     const openaiApiKey = resolveClientOpenAIApiKey(cliente, config);
     const whatsappToken = resolveClientWhatsappToken(cliente, config);
@@ -404,9 +569,7 @@ app.post("/webhook", async (req, res) => {
       return res.status(503).json({ error: "WhatsApp no configurado" });
     }
 
-    if (!historial[from]) {
-      historial[from] = [];
-    }
+    const historial = getConversationHistory(runtimeState, from);
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -415,7 +578,7 @@ app.post("/webhook", async (req, res) => {
           role: "system",
           content: buildSystemPrompt(cliente, config),
         },
-        ...historial[from],
+        ...historial,
         { role: "user", content: mensaje },
       ],
     });
@@ -467,9 +630,21 @@ app.post("/webhook", async (req, res) => {
 
     const mensajeFinal = data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
 
-    if (data.lead_calificado && !leadsEnviados.has(from)) {
-      leadsEnviados.add(from);
+    const leadKey = `${cliente.id}:${from}`;
+
+    if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
+      runtimeState.leadsEnviados.add(leadKey);
       const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
+
+      persistLeadEvent({
+        clientId: cliente.id,
+        businessName: cliente.businessName || cliente.nombre || "NEXORA",
+        toEmail: leadEmail,
+        from,
+        nombre: data.nombre || "No informado",
+        interes: data.interes || "Interesado",
+        presupuesto: data.presupuesto || "No informado",
+      });
 
       await guardarLead(
         data.nombre || "No informado",
@@ -488,17 +663,30 @@ app.post("/webhook", async (req, res) => {
       );
     }
 
-    historial[from].push({ role: "user", content: mensaje });
-    historial[from].push({ role: "assistant", content: mensajeFinal });
+    historial.push({ role: "user", content: mensaje });
+    historial.push({ role: "assistant", content: mensajeFinal });
 
-    if (historial[from].length > 6) {
-      historial[from] = historial[from].slice(-6);
+    if (historial.length > 6) {
+      runtimeState.historialPorContacto.set(from, historial.slice(-6));
     }
 
     await responderWhatsapp(phoneNumberId, from, mensajeFinal, whatsappToken);
 
+    logWebhookEvent({
+      type: "outgoing",
+      phoneNumberId,
+      clientId: cliente.id,
+      from,
+      messageId,
+      text: mensajeFinal,
+    });
+
     return res.sendStatus(200);
   } catch (error) {
+    logWebhookEvent({
+      type: "error",
+      message: error.response?.data || error.message || String(error),
+    });
     console.error("Error webhook:", error.response?.data || error.message || error);
     return res.sendStatus(500);
   }
