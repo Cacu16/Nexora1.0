@@ -48,6 +48,9 @@ function createEmailTransport() {
       host: smtpHost,
       port: Number(process.env.SMTP_PORT || 587),
       secure: String(process.env.SMTP_SECURE || "").trim().toLowerCase() === "true",
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
       auth: {
         user: smtpUser,
         pass: smtpPass,
@@ -58,6 +61,9 @@ function createEmailTransport() {
   if (gmailUser && gmailAppPassword) {
     return nodemailer.createTransport({
       service: "gmail",
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
       auth: {
         user: gmailUser,
         pass: gmailAppPassword,
@@ -253,6 +259,14 @@ function looksLikeQualifiedLead(userMessage, parsedData, assistantMessage) {
   );
 }
 
+function buildQualifiedLeadReply(cliente, parsedData) {
+  const assistantName = String(cliente?.assistantName || "Fer").trim();
+  const customerName = String(parsedData?.nombre || "").trim();
+  const greetingTarget = customerName ? ` ${customerName}` : "";
+
+  return `${assistantName}: perfecto${greetingTarget}. Ya agende tus datos y en breve te contactamos para seguir.`;
+}
+
 function resolveVerifyToken(config = getConfig()) {
   return String(
     process.env.WEBHOOK_VERIFY_TOKEN || config?.webhookVerifyToken || DEFAULT_VERIFY_TOKEN
@@ -425,17 +439,17 @@ Interes: ${interes || "No especificado"}
 Presupuesto: ${presupuesto || "No informado"}
 `;
 
-    if (resend) {
-      await resend.emails.send({
-        from: "NEXORA <onboarding@resend.dev>",
-        to: [to],
+    if (smtpTransport) {
+      await smtpTransport.sendMail({
+        from: `NEXORA <${smtpFrom}>`,
+        to,
         subject,
         text,
       });
     } else {
-      await smtpTransport.sendMail({
-        from: `NEXORA <${smtpFrom}>`,
-        to,
+      await resend.emails.send({
+        from: "NEXORA <onboarding@resend.dev>",
+        to: [to],
         subject,
         text,
       });
@@ -463,6 +477,37 @@ async function responderWhatsapp(phoneNumberId, to, body, whatsappToken) {
         "Content-Type": "application/json",
       },
     }
+  );
+}
+
+async function processQualifiedLead(cliente, runtimeState, leadKey, from, data) {
+  runtimeState.leadsEnviados.add(leadKey);
+  const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
+
+  persistLeadEvent({
+    clientId: cliente.id,
+    businessName: cliente.businessName || cliente.nombre || "NEXORA",
+    toEmail: leadEmail,
+    from,
+    nombre: data.nombre || "No informado",
+    interes: data.interes || "Interesado",
+    presupuesto: data.presupuesto || "No informado",
+  });
+
+  await guardarLead(
+    data.nombre || "No informado",
+    from,
+    cliente.nombre || "Pendiente",
+    data.interes || "Interesado"
+  );
+
+  await enviarEmailLead(
+    cliente,
+    leadEmail,
+    data.nombre || "No informado",
+    from,
+    data.interes || "Interesado",
+    data.presupuesto || "No informado"
   );
 }
 
@@ -676,41 +721,13 @@ async function processWebhookMessage(config, value, messageData) {
     }
   }
 
-  const mensajeFinal = data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
   data.lead_calificado =
-    Boolean(data.lead_calificado) || looksLikeQualifiedLead(mensaje, data, mensajeFinal);
+    Boolean(data.lead_calificado) ||
+    looksLikeQualifiedLead(mensaje, data, data.mensaje || "Perfecto, contame un poco mas y te ayudo.");
+  const mensajeFinal = data.lead_calificado
+    ? buildQualifiedLeadReply(cliente, data)
+    : data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
   const leadKey = `${cliente.id}:${from}`;
-
-  if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
-    runtimeState.leadsEnviados.add(leadKey);
-    const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
-
-    persistLeadEvent({
-      clientId: cliente.id,
-      businessName: cliente.businessName || cliente.nombre || "NEXORA",
-      toEmail: leadEmail,
-      from,
-      nombre: data.nombre || "No informado",
-      interes: data.interes || "Interesado",
-      presupuesto: data.presupuesto || "No informado",
-    });
-
-    await guardarLead(
-      data.nombre || "No informado",
-      from,
-      cliente.nombre || "Pendiente",
-      data.interes || "Interesado"
-    );
-
-    await enviarEmailLead(
-      cliente,
-      leadEmail,
-      data.nombre || "No informado",
-      from,
-      data.interes || "Interesado",
-      data.presupuesto || "No informado"
-    );
-  }
 
   historial.push({ role: "user", content: mensaje });
   historial.push({ role: "assistant", content: mensajeFinal });
@@ -729,6 +746,12 @@ async function processWebhookMessage(config, value, messageData) {
     messageId,
     text: mensajeFinal,
   });
+
+  if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
+    processQualifiedLead(cliente, runtimeState, leadKey, from, data).catch((error) => {
+      console.error("Error procesando lead:", error.response?.data || error.message || error);
+    });
+  }
 }
 
 app.post("/webhook", async (req, res) => {
