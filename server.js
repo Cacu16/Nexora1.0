@@ -516,183 +516,183 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
+async function processWebhookMessage(config, value, messageData) {
+  const messageId = messageData.id;
+
+  if (!messageData?.text?.body) {
+    return;
+  }
+
+  const from = messageData.from;
+  const mensaje = messageData.text.body;
+  const phoneNumberId = value?.metadata?.phone_number_id;
+  const cliente = getCliente(phoneNumberId);
+
+  logWebhookEvent({
+    type: "incoming",
+    phoneNumberId,
+    clientId: cliente?.id || null,
+    from,
+    messageId,
+    text: mensaje,
+  });
+
+  if (!cliente) {
+    console.log("Cliente no configurado para phoneNumberId:", phoneNumberId);
+    return;
+  }
+
+  const runtimeState = getClientRuntimeState(cliente.id);
+  const processedMessageKey = `${cliente.id}:${messageId}`;
+
+  if (runtimeState.mensajesProcesados.has(processedMessageKey)) {
+    console.log("Mensaje duplicado ignorado:", messageId);
+    return;
+  }
+
+  runtimeState.mensajesProcesados.add(processedMessageKey);
+
+  const openaiApiKey = resolveClientOpenAIApiKey(cliente, config);
+  const whatsappToken = resolveClientWhatsappToken(cliente, config);
+  const openai = getOpenAIClient(openaiApiKey);
+
+  if (!openai) {
+    throw new Error(`OpenAI no configurado para cliente ${cliente.id}`);
+  }
+
+  if (!whatsappToken) {
+    throw new Error(`WhatsApp no configurado para cliente ${cliente.id}`);
+  }
+
+  const historial = getConversationHistory(runtimeState, from);
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: buildSystemPrompt(cliente, config),
+      },
+      ...historial,
+      { role: "user", content: mensaje },
+    ],
+  });
+
+  const respuestaCruda = response.choices[0]?.message?.content || "";
+  let data = {
+    mensaje: respuestaCruda,
+    lead_calificado: false,
+    nombre: null,
+    telefono: null,
+    interes: null,
+    presupuesto: null,
+  };
+
+  try {
+    data = JSON.parse(respuestaCruda);
+  } catch {
+    const match = respuestaCruda.match(/\{[\s\S]*\}/);
+
+    if (match) {
+      try {
+        const jsonExtraido = JSON.parse(match[0]);
+
+        data = {
+          mensaje:
+            jsonExtraido.mensaje ||
+            respuestaCruda.replace(match[0], "").trim() ||
+            "Perfecto, contame un poco mas y te ayudo.",
+          lead_calificado: Boolean(jsonExtraido.lead_calificado),
+          nombre: jsonExtraido.nombre || null,
+          telefono: jsonExtraido.telefono || null,
+          interes: jsonExtraido.interes || null,
+          presupuesto: jsonExtraido.presupuesto || null,
+        };
+      } catch {
+        data = {
+          mensaje:
+            respuestaCruda.replace(/\{[\s\S]*\}/, "").trim() ||
+            "Perfecto, contame un poco mas y te ayudo.",
+          lead_calificado: false,
+          nombre: null,
+          telefono: null,
+          interes: null,
+          presupuesto: null,
+        };
+      }
+    }
+  }
+
+  const mensajeFinal = data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
+  const leadKey = `${cliente.id}:${from}`;
+
+  if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
+    runtimeState.leadsEnviados.add(leadKey);
+    const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
+
+    persistLeadEvent({
+      clientId: cliente.id,
+      businessName: cliente.businessName || cliente.nombre || "NEXORA",
+      toEmail: leadEmail,
+      from,
+      nombre: data.nombre || "No informado",
+      interes: data.interes || "Interesado",
+      presupuesto: data.presupuesto || "No informado",
+    });
+
+    await guardarLead(
+      data.nombre || "No informado",
+      from,
+      cliente.nombre || "Pendiente",
+      data.interes || "Interesado"
+    );
+
+    await enviarEmailLead(
+      cliente,
+      leadEmail,
+      data.nombre || "No informado",
+      from,
+      data.interes || "Interesado",
+      data.presupuesto || "No informado"
+    );
+  }
+
+  historial.push({ role: "user", content: mensaje });
+  historial.push({ role: "assistant", content: mensajeFinal });
+
+  if (historial.length > 6) {
+    runtimeState.historialPorContacto.set(from, historial.slice(-6));
+  }
+
+  await responderWhatsapp(phoneNumberId, from, mensajeFinal, whatsappToken);
+
+  logWebhookEvent({
+    type: "outgoing",
+    phoneNumberId,
+    clientId: cliente.id,
+    from,
+    messageId,
+    text: mensajeFinal,
+  });
+}
+
 app.post("/webhook", async (req, res) => {
   try {
     const config = getConfig();
-
     const body = req.body;
 
-    if (!body.entry) {
+    if (!Array.isArray(body?.entry) || !body.entry.length) {
       return res.sendStatus(200);
     }
 
-    const value = body.entry[0]?.changes?.[0]?.value;
+    for (const entry of body.entry) {
+      for (const change of entry?.changes || []) {
+        const value = change?.value;
 
-    if (!value?.messages?.[0]) {
-      return res.sendStatus(200);
-    }
-
-    const messageData = value.messages[0];
-    const messageId = messageData.id;
-
-    if (!messageData.text?.body) {
-      return res.sendStatus(200);
-    }
-
-    const from = messageData.from;
-    const mensaje = messageData.text.body;
-    const phoneNumberId = value.metadata.phone_number_id;
-    const cliente = getCliente(phoneNumberId);
-
-    logWebhookEvent({
-      type: "incoming",
-      phoneNumberId,
-      clientId: cliente?.id || null,
-      from,
-      messageId,
-      text: mensaje,
-    });
-
-    if (!cliente) {
-      console.log("Cliente no configurado para phoneNumberId:", phoneNumberId);
-      return res.sendStatus(200);
-    }
-
-    const runtimeState = getClientRuntimeState(cliente.id);
-    const processedMessageKey = `${cliente.id}:${messageId}`;
-
-    if (runtimeState.mensajesProcesados.has(processedMessageKey)) {
-      console.log("Mensaje duplicado ignorado:", messageId);
-      return res.sendStatus(200);
-    }
-
-    runtimeState.mensajesProcesados.add(processedMessageKey);
-
-    const openaiApiKey = resolveClientOpenAIApiKey(cliente, config);
-    const whatsappToken = resolveClientWhatsappToken(cliente, config);
-    const openai = getOpenAIClient(openaiApiKey);
-
-    if (!openai) {
-      console.error("OPENAI_API_KEY no configurada para cliente:", cliente.id);
-      return res.status(503).json({ error: "OpenAI no configurado" });
-    }
-
-    if (!whatsappToken) {
-      console.error("WHATSAPP_TOKEN no configurado para cliente:", cliente.id);
-      return res.status(503).json({ error: "WhatsApp no configurado" });
-    }
-
-    const historial = getConversationHistory(runtimeState, from);
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt(cliente, config),
-        },
-        ...historial,
-        { role: "user", content: mensaje },
-      ],
-    });
-
-    const respuestaCruda = response.choices[0]?.message?.content || "";
-    let data = {
-      mensaje: respuestaCruda,
-      lead_calificado: false,
-      nombre: null,
-      telefono: null,
-      interes: null,
-      presupuesto: null,
-    };
-
-    try {
-      data = JSON.parse(respuestaCruda);
-    } catch {
-      const match = respuestaCruda.match(/\{[\s\S]*\}/);
-
-      if (match) {
-        try {
-          const jsonExtraido = JSON.parse(match[0]);
-
-          data = {
-            mensaje:
-              jsonExtraido.mensaje ||
-              respuestaCruda.replace(match[0], "").trim() ||
-              "Perfecto, contame un poco mas y te ayudo.",
-            lead_calificado: Boolean(jsonExtraido.lead_calificado),
-            nombre: jsonExtraido.nombre || null,
-            telefono: jsonExtraido.telefono || null,
-            interes: jsonExtraido.interes || null,
-            presupuesto: jsonExtraido.presupuesto || null,
-          };
-        } catch {
-          data = {
-            mensaje:
-              respuestaCruda.replace(/\{[\s\S]*\}/, "").trim() ||
-              "Perfecto, contame un poco mas y te ayudo.",
-            lead_calificado: false,
-            nombre: null,
-            telefono: null,
-            interes: null,
-            presupuesto: null,
-          };
+        for (const messageData of value?.messages || []) {
+          await processWebhookMessage(config, value, messageData);
         }
       }
     }
-
-    const mensajeFinal = data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
-
-    const leadKey = `${cliente.id}:${from}`;
-
-    if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
-      runtimeState.leadsEnviados.add(leadKey);
-      const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
-
-      persistLeadEvent({
-        clientId: cliente.id,
-        businessName: cliente.businessName || cliente.nombre || "NEXORA",
-        toEmail: leadEmail,
-        from,
-        nombre: data.nombre || "No informado",
-        interes: data.interes || "Interesado",
-        presupuesto: data.presupuesto || "No informado",
-      });
-
-      await guardarLead(
-        data.nombre || "No informado",
-        from,
-        cliente.nombre || "Pendiente",
-        data.interes || "Interesado"
-      );
-
-      await enviarEmailLead(
-        cliente,
-        leadEmail,
-        data.nombre || "No informado",
-        from,
-        data.interes || "Interesado",
-        data.presupuesto || "No informado"
-      );
-    }
-
-    historial.push({ role: "user", content: mensaje });
-    historial.push({ role: "assistant", content: mensajeFinal });
-
-    if (historial.length > 6) {
-      runtimeState.historialPorContacto.set(from, historial.slice(-6));
-    }
-
-    await responderWhatsapp(phoneNumberId, from, mensajeFinal, whatsappToken);
-
-    logWebhookEvent({
-      type: "outgoing",
-      phoneNumberId,
-      clientId: cliente.id,
-      from,
-      messageId,
-      text: mensajeFinal,
-    });
 
     return res.sendStatus(200);
   } catch (error) {
