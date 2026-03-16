@@ -419,6 +419,7 @@ async function guardarLead(nombre, telefono, rubro, interes) {
 
 async function enviarEmailLead(cliente, to, nombre, telefono, interes, presupuesto) {
   const businessLabel = cliente?.businessName || cliente?.nombre || "NEXORA";
+  const resendFrom = String(process.env.EMAIL_FROM || "").trim();
   const smtpFrom =
     String(process.env.SMTP_FROM || "").trim() ||
     String(process.env.GMAIL_USER || "").trim() ||
@@ -439,7 +440,14 @@ Interes: ${interes || "No especificado"}
 Presupuesto: ${presupuesto || "No informado"}
 `;
 
-    if (smtpTransport) {
+    if (resend && resendFrom) {
+      await resend.emails.send({
+        from: resendFrom,
+        to: [to],
+        subject,
+        text,
+      });
+    } else if (smtpTransport) {
       await smtpTransport.sendMail({
         from: `NEXORA <${smtpFrom}>`,
         to,
