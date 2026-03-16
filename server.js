@@ -75,6 +75,19 @@ function appendJsonl(fileName, payload) {
 }
 
 function logWebhookEvent(payload) {
+  const summary = [
+    payload.type || "event",
+    payload.clientId || "sin-cliente",
+    payload.phoneNumberId || "sin-phone-id",
+    payload.from || "sin-from",
+  ].join(" | ");
+
+  console.log(`[webhook] ${summary}`);
+
+  if (payload.message) {
+    console.log(`[webhook-detail] ${payload.message}`);
+  }
+
   appendJsonl("webhook-events.jsonl", {
     timestamp: new Date().toISOString(),
     ...payload,
