@@ -180,6 +180,10 @@ IMPORTANTE:
 Responde SOLO con JSON valido.
 No agregues texto antes ni despues del JSON.
 No escribas la palabra json ni explicaciones extra.
+Nunca menciones cuentas bancarias, alias, CBU, CVU, links de pago, confirmacion de pedido,
+entrega, retiro o stock confirmado si esa informacion no esta escrita en la configuracion del cliente.
+Si el catalogo del cliente esta cargado en "Planes disponibles", tomalo como catalogo cerrado:
+no inventes productos, marcas, variedades, presentaciones ni precios fuera de esa lista.
 
 Formato obligatorio:
 {
@@ -197,6 +201,56 @@ lead_calificado = true
 Planes disponibles:
 ${buildPlanesText(cliente)}
 `.trim();
+}
+
+function normalizeLeadSignalText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function looksLikeQualifiedLead(userMessage, parsedData, assistantMessage) {
+  const userText = normalizeLeadSignalText(userMessage);
+  const assistantText = normalizeLeadSignalText(assistantMessage);
+  const combinedText = `${userText} ${assistantText}`;
+  const purchaseSignals = [
+    "quiero comprar",
+    "quiero pedir",
+    "quiero una",
+    "quiero dos",
+    "me interesa",
+    "cuanto sale",
+    "como pago",
+    "quiero pagar",
+    "quiero reservar",
+    "quiero encargar",
+    "quiero llevar",
+    "te compro",
+    "quiero el",
+    "quiero la",
+  ];
+  const closingSignals = [
+    "nombre",
+    "telefono",
+    "contacto",
+    "pago",
+    "transferencia",
+    "pedido",
+    "reserva",
+    "entrega",
+    "retiro",
+    "direccion",
+  ];
+  const hasStructuredLeadData = Boolean(
+    parsedData?.nombre || parsedData?.telefono || parsedData?.interes || parsedData?.presupuesto
+  );
+
+  return (
+    hasStructuredLeadData ||
+    (purchaseSignals.some((signal) => userText.includes(signal)) &&
+      closingSignals.some((signal) => combinedText.includes(signal)))
+  );
 }
 
 function resolveVerifyToken(config = getConfig()) {
@@ -623,6 +677,8 @@ async function processWebhookMessage(config, value, messageData) {
   }
 
   const mensajeFinal = data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
+  data.lead_calificado =
+    Boolean(data.lead_calificado) || looksLikeQualifiedLead(mensaje, data, mensajeFinal);
   const leadKey = `${cliente.id}:${from}`;
 
   if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
