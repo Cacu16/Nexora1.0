@@ -348,13 +348,63 @@ function looksLikeQualifiedLead(userMessage, parsedData, assistantMessage) {
   );
 }
 
+function looksLikeFarewellMessage(userMessage) {
+  const text = normalizeLeadSignalText(userMessage);
+
+  if (!text) {
+    return false;
+  }
+
+  const farewellSignals = [
+    "gracias",
+    "muchas gracias",
+    "chau",
+    "chauu",
+    "adios",
+    "hasta luego",
+    "nos vemos",
+    "saludos",
+    "buenisimo gracias",
+    "genial gracias",
+    "perfecto gracias",
+    "dale gracias",
+    "listo gracias",
+  ];
+  const continuationSignals = [
+    "?",
+    "precio",
+    "cuanto",
+    "como",
+    "donde",
+    "cuando",
+    "quiero",
+    "me interesa",
+    "mandame",
+    "pasame",
+    "necesito",
+    "pero",
+  ];
+
+  return (
+    farewellSignals.some((signal) => text.includes(signal)) &&
+    !continuationSignals.some((signal) => text.includes(signal))
+  );
+}
+
+function buildFarewellReply(parsedData) {
+  const customerName = String(parsedData?.nombre || "").trim();
+  const greetingTarget = customerName ? ` ${customerName}` : "";
+
+  return `Saludos${greetingTarget}, si necesitas algo mas estamos en contacto.`;
+}
+
 function buildQualifiedLeadReply(cliente, parsedData) {
   const customerName = String(parsedData?.nombre || "").trim();
   const greetingTarget = customerName ? ` ${customerName}` : "";
   const interes = String(parsedData?.interes || "").trim();
-  const interestTail = interes ? ` por ${interes}` : "";
+  const orderTail = interes ? ` y tu pedido de ${interes}` : " y tu pedido";
 
-  return `Perfecto${greetingTarget}. Ya deje tus datos agendados${interestTail} y en breve seguimos por aca para avanzar.`;
+  return `Perfecto${greetingTarget}. Ya guardamos tus datos de contacto${orderTail}. Un asesor te va a contactar a la brevedad para finalizar el proceso.`;
 }
 
 function resolveVerifyToken(config = getConfig()) {
@@ -840,9 +890,12 @@ async function processWebhookMessage(config, value, messageData) {
   data.lead_calificado =
     (Boolean(data.lead_calificado) && hasLeadContactData(data)) ||
     looksLikeQualifiedLead(mensaje, data, data.mensaje || "Perfecto, contame un poco mas y te ayudo.");
-  const mensajeFinal = data.lead_calificado
-    ? buildQualifiedLeadReply(cliente, data)
-    : data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
+  const isFarewell = looksLikeFarewellMessage(mensaje);
+  const mensajeFinal = isFarewell
+    ? buildFarewellReply(data)
+    : data.lead_calificado
+      ? buildQualifiedLeadReply(cliente, data)
+      : data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
   const leadKey = `${cliente.id}:${from}`;
 
   historial.push({ role: "user", content: mensaje });
