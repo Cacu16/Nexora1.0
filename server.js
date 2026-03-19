@@ -228,12 +228,12 @@ Formato obligatorio:
 }
 
 Reglas para completar el JSON:
-- "lead_calificado" = true solo si hay intencion comercial real, pedido concreto o datos suficientes para avanzar.
+- "lead_calificado" = true solo si ya tienes nombre y telefono confirmados, junto con una intencion comercial clara.
 - "nombre" solo si el cliente lo dijo o lo confirmo.
 - "telefono" solo si el cliente lo dijo o lo confirmo dentro de la charla.
-- "interes" debe resumir que quiere comprar o contratar el cliente.
+- "interes" debe resumir con precision que quiere comprar o contratar el cliente; si es un producto o plan puntual, nombra ese producto o plan.
 - "presupuesto" solo si el cliente lo menciono.
-- Si faltan datos importantes para avanzar, usalos en "mensaje" para pedir el siguiente dato faltante con naturalidad.
+- Si falta nombre o telefono, no marques lead_calificado y usalos en "mensaje" para pedir el siguiente dato faltante con naturalidad.
 
 Planes disponibles:
 ${buildPlanesText(cliente)}
@@ -245,6 +245,65 @@ function normalizeLeadSignalText(value) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+}
+
+function hasLeadContactData(parsedData) {
+  return Boolean(String(parsedData?.nombre || "").trim() && String(parsedData?.telefono || "").trim());
+}
+
+function inferCatalogInterest(cliente, ...texts) {
+  const catalog = Array.isArray(cliente?.planes) ? cliente.planes : [];
+  const normalizedTexts = texts.map((value) => normalizeLeadSignalText(value)).join(" ");
+
+  for (const plan of catalog) {
+    const planName = String(plan?.nombre || "").trim();
+    if (!planName) {
+      continue;
+    }
+
+    const normalizedPlanName = normalizeLeadSignalText(planName);
+    if (normalizedPlanName && normalizedTexts.includes(normalizedPlanName)) {
+      return planName;
+    }
+  }
+
+  return null;
+}
+
+function shouldReplaceLeadInterest(interes) {
+  const normalized = normalizeLeadSignalText(interes);
+  if (!normalized) {
+    return true;
+  }
+
+  return [
+    "interesado",
+    "consulta",
+    "compra",
+    "pedido",
+    "producto",
+    "servicio",
+    "plan",
+    "vino",
+    "automatizacion",
+  ].includes(normalized);
+}
+
+function enrichLeadData(cliente, userMessage, parsedData, history = []) {
+  const enrichedData = { ...parsedData };
+  const historyTexts = history.map((item) => item?.content || "");
+  const inferredInterest = inferCatalogInterest(
+    cliente,
+    enrichedData?.interes,
+    userMessage,
+    ...historyTexts
+  );
+
+  if (inferredInterest && shouldReplaceLeadInterest(enrichedData?.interes)) {
+    enrichedData.interes = inferredInterest;
+  }
+
+  return enrichedData;
 }
 
 function looksLikeQualifiedLead(userMessage, parsedData, assistantMessage) {
@@ -279,14 +338,13 @@ function looksLikeQualifiedLead(userMessage, parsedData, assistantMessage) {
     "retiro",
     "direccion",
   ];
-  const hasStructuredLeadData = Boolean(
-    parsedData?.nombre || parsedData?.telefono || parsedData?.interes || parsedData?.presupuesto
-  );
+  const hasQualifiedLeadData = hasLeadContactData(parsedData);
 
   return (
-    hasStructuredLeadData ||
+    hasQualifiedLeadData ||
     (purchaseSignals.some((signal) => userText.includes(signal)) &&
-      closingSignals.some((signal) => combinedText.includes(signal)))
+      closingSignals.some((signal) => combinedText.includes(signal)) &&
+      hasLeadContactData(parsedData))
   );
 }
 
@@ -473,15 +531,13 @@ async function enviarEmailLead(
   try {
     const subject = `Nuevo lead - ${businessLabel}`;
     const phoneText = telefono || "No informado";
-    const originLine =
-      whatsappOrigen && whatsappOrigen !== telefono
-        ? `WhatsApp de origen: ${whatsappOrigen}\n`
-        : "";
+    const originText = whatsappOrigen || "No informado";
     const text = `
 Cliente: ${businessLabel}
 Nombre: ${nombre || "No informado"}
-Telefono: ${phoneText}
-${originLine}Interes: ${interes || "No especificado"}
+Telefono brindado: ${phoneText}
+WhatsApp de origen: ${originText}
+Interes: ${interes || "No especificado"}
 Presupuesto: ${presupuesto || "No informado"}
 `;
 
@@ -545,6 +601,7 @@ async function processQualifiedLead(cliente, runtimeState, leadKey, from, data) 
     from,
     nombre: data.nombre || "No informado",
     telefono: resolvedPhone,
+    whatsappOrigen: from || "No informado",
     interes: data.interes || "Interesado",
     presupuesto: data.presupuesto || "No informado",
   });
@@ -778,8 +835,10 @@ async function processWebhookMessage(config, value, messageData) {
     }
   }
 
+  data = enrichLeadData(cliente, mensaje, data, historial);
+
   data.lead_calificado =
-    Boolean(data.lead_calificado) ||
+    (Boolean(data.lead_calificado) && hasLeadContactData(data)) ||
     looksLikeQualifiedLead(mensaje, data, data.mensaje || "Perfecto, contame un poco mas y te ayudo.");
   const mensajeFinal = data.lead_calificado
     ? buildQualifiedLeadReply(cliente, data)
