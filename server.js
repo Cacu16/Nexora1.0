@@ -142,7 +142,8 @@ function buildClientMainPrompt(basePrompt, cliente) {
   return String(basePrompt || "").replace(/\bNexora\b/gi, businessName).trim();
 }
 
-function buildSystemPrompt(cliente, config) {
+function buildSystemPrompt(cliente, config, options = {}) {
+  const hasAssistantHistory = Boolean(options?.hasAssistantHistory);
   const promptNotes = Array.isArray(cliente.promptNotes) && cliente.promptNotes.length
     ? cliente.promptNotes.map((note) => `- ${note}`).join("\n")
     : "- Responde de forma clara, breve y natural.";
@@ -152,6 +153,15 @@ function buildSystemPrompt(cliente, config) {
     cliente?.mainPromptOverride || buildClientMainPrompt(globalPrompt, cliente)
   ).trim();
   const clientPrompt = String(cliente.clientPrompt || "").trim();
+  const openingRules = hasAssistantHistory
+    ? [
+        "- Ya respondiste antes en esta conversacion: no reinicies, no repitas saludo, no repitas presentacion y no mandes otra bienvenida.",
+        "- Si el cliente retoma despues de horas o dias, segui natural desde el ultimo punto util.",
+      ].join("\n")
+    : [
+        "- Si es tu primera respuesta, presentate solo si el cliente saluda, pregunta quien sos o el contexto realmente lo necesita.",
+        "- Si el cliente va directo a una consulta, responde directo sin mensaje de presentacion.",
+      ].join("\n");
 
   return `
 PROMPT PRINCIPAL NEXORA:
@@ -160,7 +170,7 @@ ${effectiveMainPrompt || "Sos el operador principal de Nexora."}
 CONTEXTO DEL CLIENTE:
 Tu nombre es ${cliente.assistantName || "Fer"}.
 Sos ${cliente.assistantName || "Fer"}, el asistente oficial de ${cliente.businessName || cliente.nombre}.
-Siempre te presentas como ${cliente.assistantName || "Fer"} cuando hablas con un cliente.
+Te identificas como ${cliente.assistantName || "Fer"} solo cuando aporta valor a la conversacion.
 
 Nunca digas que sos una IA.
 Nunca digas que sos un asistente generico.
@@ -173,6 +183,13 @@ ${cliente.leadGoal || "Ayudar al usuario, responder dudas y detectar oportunidad
 Mensaje base de presentacion si preguntan quien sos:
 ${cliente.greeting || `Soy ${cliente.assistantName || "Fer"}, asistente de ${cliente.businessName || cliente.nombre}.`}
 
+Reglas de apertura y seguimiento:
+- No envias mensajes proactivos, reactivaciones ni seguimientos si el cliente no respondio.
+- Si el cliente queda en silencio, guardas silencio.
+${openingRules}
+- Hace seguimiento basico solo dentro de la conversacion activa y solo para destrabar un dato faltante; recordalo una sola vez y con naturalidad.
+- Si la conversacion ya viene avanzada, retoma el contexto sin volver a empezar.
+
 Reglas adicionales:
 ${promptNotes}
 
@@ -181,6 +198,15 @@ ${cliente.tono || "Claro y natural"}
 
 PROMPT ESPECIFICO DEL CLIENTE:
 ${clientPrompt || "Sin instrucciones extra para este cliente."}
+
+Modo premium de atencion y ventas:
+- Detecta la etapa del cliente: exploracion, comparacion, objecion o decision.
+- Adapta el flujo segun la etapa y la intencion real de compra.
+- Prioriza respuestas inteligentes, claras y accionables.
+- Usa multiples flujos segun corresponda: consulta general, recomendacion, objecion, cierre, toma de datos y seguimiento basico.
+- Cuando haya intencion real de compra o contratacion, intenta capturar nombre y telefono.
+- Pide un solo dato por vez y solo el minimo necesario para avanzar.
+- Si ya tienes suficiente contexto para recomendar, no hagas preguntas innecesarias.
 
 IMPORTANTE:
 Responde SOLO con JSON valido.
@@ -201,8 +227,13 @@ Formato obligatorio:
   "presupuesto": null
 }
 
-Si el usuario muestra intencion clara de contratar:
-lead_calificado = true
+Reglas para completar el JSON:
+- "lead_calificado" = true solo si hay intencion comercial real, pedido concreto o datos suficientes para avanzar.
+- "nombre" solo si el cliente lo dijo o lo confirmo.
+- "telefono" solo si el cliente lo dijo o lo confirmo dentro de la charla.
+- "interes" debe resumir que quiere comprar o contratar el cliente.
+- "presupuesto" solo si el cliente lo menciono.
+- Si faltan datos importantes para avanzar, usalos en "mensaje" para pedir el siguiente dato faltante con naturalidad.
 
 Planes disponibles:
 ${buildPlanesText(cliente)}
@@ -260,11 +291,12 @@ function looksLikeQualifiedLead(userMessage, parsedData, assistantMessage) {
 }
 
 function buildQualifiedLeadReply(cliente, parsedData) {
-  const assistantName = String(cliente?.assistantName || "Fer").trim();
   const customerName = String(parsedData?.nombre || "").trim();
   const greetingTarget = customerName ? ` ${customerName}` : "";
+  const interes = String(parsedData?.interes || "").trim();
+  const interestTail = interes ? ` por ${interes}` : "";
 
-  return `${assistantName}: perfecto${greetingTarget}. Ya agende tus datos y en breve te contactamos para seguir.`;
+  return `Perfecto${greetingTarget}. Ya deje tus datos agendados${interestTail} y en breve seguimos por aca para avanzar.`;
 }
 
 function resolveVerifyToken(config = getConfig()) {
@@ -417,7 +449,15 @@ async function guardarLead(nombre, telefono, rubro, interes) {
   }
 }
 
-async function enviarEmailLead(cliente, to, nombre, telefono, interes, presupuesto) {
+async function enviarEmailLead(
+  cliente,
+  to,
+  nombre,
+  telefono,
+  interes,
+  presupuesto,
+  whatsappOrigen = null
+) {
   const businessLabel = cliente?.businessName || cliente?.nombre || "NEXORA";
   const resendFrom = String(process.env.EMAIL_FROM || "").trim();
   const smtpFrom =
@@ -432,11 +472,16 @@ async function enviarEmailLead(cliente, to, nombre, telefono, interes, presupues
 
   try {
     const subject = `Nuevo lead - ${businessLabel}`;
+    const phoneText = telefono || "No informado";
+    const originLine =
+      whatsappOrigen && whatsappOrigen !== telefono
+        ? `WhatsApp de origen: ${whatsappOrigen}\n`
+        : "";
     const text = `
 Cliente: ${businessLabel}
 Nombre: ${nombre || "No informado"}
-Telefono: ${telefono || "No informado"}
-Interes: ${interes || "No especificado"}
+Telefono: ${phoneText}
+${originLine}Interes: ${interes || "No especificado"}
 Presupuesto: ${presupuesto || "No informado"}
 `;
 
@@ -491,6 +536,7 @@ async function responderWhatsapp(phoneNumberId, to, body, whatsappToken) {
 async function processQualifiedLead(cliente, runtimeState, leadKey, from, data) {
   runtimeState.leadsEnviados.add(leadKey);
   const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
+  const resolvedPhone = String(data.telefono || from || "").trim() || "No informado";
 
   persistLeadEvent({
     clientId: cliente.id,
@@ -498,13 +544,14 @@ async function processQualifiedLead(cliente, runtimeState, leadKey, from, data) 
     toEmail: leadEmail,
     from,
     nombre: data.nombre || "No informado",
+    telefono: resolvedPhone,
     interes: data.interes || "Interesado",
     presupuesto: data.presupuesto || "No informado",
   });
 
   await guardarLead(
     data.nombre || "No informado",
-    from,
+    resolvedPhone,
     cliente.nombre || "Pendiente",
     data.interes || "Interesado"
   );
@@ -513,9 +560,10 @@ async function processQualifiedLead(cliente, runtimeState, leadKey, from, data) 
     cliente,
     leadEmail,
     data.nombre || "No informado",
-    from,
+    resolvedPhone,
     data.interes || "Interesado",
-    data.presupuesto || "No informado"
+    data.presupuesto || "No informado",
+    from
   );
 }
 
@@ -672,12 +720,13 @@ async function processWebhookMessage(config, value, messageData) {
   }
 
   const historial = getConversationHistory(runtimeState, from);
+  const hasAssistantHistory = historial.some((item) => item.role === "assistant");
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
       {
         role: "system",
-        content: buildSystemPrompt(cliente, config),
+        content: buildSystemPrompt(cliente, config, { hasAssistantHistory }),
       },
       ...historial,
       { role: "user", content: mensaje },
