@@ -368,6 +368,9 @@ ${knownLeadSnapshot
     ? [
         `- Nombre ya confirmado: ${knownLeadSnapshot.confirmedName || "No informado"}`,
         `- Telefono ya confirmado: ${knownLeadSnapshot.confirmedPhone || "No informado"}`,
+        knownLeadSnapshot.contactPreference
+          ? `- Preferencia de contacto registrada: ${knownLeadSnapshot.contactPreference}`
+          : null,
         knownLeadSnapshot.leadInterest
           ? `- Interes registrado: ${knownLeadSnapshot.leadInterest}`
           : null,
@@ -388,6 +391,7 @@ Modo premium de atencion y ventas:
 - Prioriza respuestas inteligentes, claras y accionables.
 - Usa multiples flujos segun corresponda: consulta general, recomendacion, objecion, cierre, toma de datos y seguimiento basico.
 - Cuando haya intencion real de compra o contratacion, intenta capturar nombre y telefono.
+- Cuando pidas datos de contacto para que un asesor siga la conversacion, pedi tambien que dia y horario le quedan mejor para recibir ese contacto.
 - Pide un solo dato por vez y solo el minimo necesario para avanzar.
 - Si ya tienes suficiente contexto para recomendar, no hagas preguntas innecesarias.
 - Si el cliente menciona una fecha u horario que ya paso respecto de hoy, no lo confirmes ni lo agendes.
@@ -397,7 +401,7 @@ Modo premium de atencion y ventas:
 - Si el lead ya fue enviado al equipo, no digas que faltan datos de contacto ni afirmes que no los tienes.
 - Solo vuelve a preguntar nombre o telefono si el cliente aclara que quiere corregirlos o cambiarlos.
 - Si el cliente quiere coordinar una reunion, llamada o demo comercial, no respondas que no puedes agendar.
-- En ese caso, captura nombre y telefono si faltan y deja la conversacion lista para que un asesor lo contacte a la brevedad y confirme esa reunion.
+- En ese caso, captura nombre, telefono y la preferencia de fecha/horario de contacto si faltan, y deja la conversacion lista para que un asesor lo contacte a la brevedad y confirme esa reunion.
 - Habla siempre en espanol rioplatense real: preferi "aca", "decime", "contame", "si queres", "dale", "buenisimo", "podes".
 - Evita palabras o giros neutros o demasiado formales como "aqui", "puedes", "de acuerdo", "indiqueme", "podria", "si deseas", "comprendo".
 - Nunca te describas como IA, inteligencia artificial, asistente virtual, bot o modelo.
@@ -423,6 +427,7 @@ Formato obligatorio:
   "lead_calificado": false,
   "nombre": null,
   "telefono": null,
+  "preferencia_contacto": null,
   "interes": null,
   "presupuesto": null
 }
@@ -431,6 +436,7 @@ Reglas para completar el JSON:
 - "lead_calificado" = true solo si ya tienes nombre y telefono confirmados, junto con una intencion comercial clara.
 - "nombre" solo si el cliente lo dijo o lo confirmo.
 - "telefono" solo si el cliente lo dijo o lo confirmo dentro de la charla.
+- "preferencia_contacto" solo si el cliente indico un dia, fecha, franja horaria u horario preferido para que lo contacten.
 - "interes" debe resumir con precision que quiere comprar o contratar el cliente; si es un producto o plan puntual, nombra ese producto o plan.
 - "presupuesto" solo si el cliente lo menciono.
 - Si falta nombre o telefono, no marques lead_calificado y usalos en "mensaje" para pedir el siguiente dato faltante con naturalidad.
@@ -663,6 +669,17 @@ function buildQualifiedLeadReply(cliente, parsedData, options = {}) {
   return `Perfecto${greetingTarget}. Ya guardamos tus datos de contacto${orderTail}. Un asesor te va a contactar a la brevedad para finalizar el proceso.`;
 }
 
+function inferUnsupportedMediaReplyType(messageType, messageText = "") {
+  const normalizedType = String(messageType || "").trim().toLowerCase();
+  const normalizedText = normalizeLeadSignalText(messageText);
+
+  if (normalizedType === "sticker" || normalizedText.includes("envio un sticker")) {
+    return "sticker";
+  }
+
+  return "image";
+}
+
 function hasUnsupportedPromise(message) {
   const normalizedMessage = normalizeLeadSignalText(message);
 
@@ -804,6 +821,28 @@ function inferMeetingLabel(...texts) {
   return "la reunion";
 }
 
+function joinNaturalList(items) {
+  const filteredItems = items.filter(Boolean);
+
+  if (filteredItems.length <= 1) {
+    return filteredItems[0] || "";
+  }
+
+  if (filteredItems.length === 2) {
+    return `${filteredItems[0]} y ${filteredItems[1]}`;
+  }
+
+  return `${filteredItems.slice(0, -1).join(", ")} y ${filteredItems[filteredItems.length - 1]}`;
+}
+
+function buildMissingContactDetailsText({ needName = false, needPhone = false, needContactPreference = false } = {}) {
+  return joinNaturalList([
+    needName ? "tu nombre" : null,
+    needPhone ? "tu telefono" : null,
+    needContactPreference ? "que dia y horario te quedan mejor para que te contacten" : null,
+  ]);
+}
+
 function isMeetingRefusal(message) {
   const normalizedMessage = normalizeLeadSignalText(message);
 
@@ -825,20 +864,24 @@ function buildMeetingLeadReply(parsedData, knownLeadSnapshot, ...texts) {
   const meetingLabel = inferMeetingLabel(...texts);
   const knownName = String(parsedData?.nombre || knownLeadSnapshot?.confirmedName || "").trim();
   const knownPhone = String(parsedData?.telefono || knownLeadSnapshot?.confirmedPhone || "").trim();
+  const knownContactPreference = String(
+    parsedData?.preferencia_contacto || knownLeadSnapshot?.contactPreference || ""
+  ).trim();
+  const missingMeetingDetails = buildMissingContactDetailsText({
+    needName: !knownName,
+    needPhone: !knownPhone,
+    needContactPreference: !knownContactPreference,
+  });
+
+  if (knownName && knownPhone && knownContactPreference) {
+    return `Perfecto${knownName ? ` ${knownName}` : ""}. Ya deje tus datos para coordinar ${meetingLabel} y la preferencia de contacto que me pasaste. Un asesor te va a contactar a la brevedad para confirmarla.`;
+  }
 
   if (knownName && knownPhone) {
-    return `Perfecto${knownName ? ` ${knownName}` : ""}. Ya deje tus datos para coordinar ${meetingLabel}. Un asesor te va a contactar a la brevedad para confirmarla.`;
+    return `Perfecto${knownName ? ` ${knownName}` : ""}. Ya deje tus datos para coordinar ${meetingLabel}. Si queres, decime que dia y horario te quedan mejor para que te contacten.`;
   }
 
-  if (!knownName && !knownPhone) {
-    return `Si queres coordinar ${meetingLabel}, decime tu nombre y telefono y la dejo cargada para que un asesor te contacte y la confirme.`;
-  }
-
-  if (!knownName) {
-    return `Si queres coordinar ${meetingLabel}, decime tu nombre y la dejo cargada para que un asesor te contacte y la confirme.`;
-  }
-
-  return `Si queres coordinar ${meetingLabel}, decime tu telefono y la dejo cargada para que un asesor te contacte y la confirme.`;
+  return `Si queres coordinar ${meetingLabel}, decime ${missingMeetingDetails}. Asi la dejo cargada para que un asesor la confirme.`;
 }
 
 function hasForbiddenSensitiveDataRequest(message) {
@@ -870,20 +913,24 @@ function buildSafeLeadContinuationReply(parsedData, knownLeadSnapshot, meetingRe
 
   const knownName = String(parsedData?.nombre || knownLeadSnapshot?.confirmedName || "").trim();
   const knownPhone = String(parsedData?.telefono || knownLeadSnapshot?.confirmedPhone || "").trim();
+  const knownContactPreference = String(
+    parsedData?.preferencia_contacto || knownLeadSnapshot?.contactPreference || ""
+  ).trim();
+  const missingContactDetails = buildMissingContactDetailsText({
+    needName: !knownName,
+    needPhone: !knownPhone,
+    needContactPreference: !knownContactPreference,
+  });
 
-  if (knownName && knownPhone) {
+  if (knownName && knownPhone && knownContactPreference) {
     return "Con lo que ya me compartiste alcanza para dejarlo cargado. Un asesor te va a contactar a la brevedad para seguir y confirmar el proximo paso.";
   }
 
-  if (!knownName && !knownPhone) {
-    return "Por ahora solo necesito tu nombre y telefono para dejar el contacto cargado. Si queres, pasamelos y seguimos por aca.";
+  if (knownName && knownPhone) {
+    return "Ya tengo tu nombre y telefono. Si queres, decime tambien que dia y horario te quedan mejor para que te contacten.";
   }
 
-  if (!knownName) {
-    return "Por ahora solo necesito tu nombre para dejar el contacto cargado. Si queres, pasamelo y seguimos por aca.";
-  }
-
-  return "Por ahora solo necesito tu telefono para dejar el contacto cargado. Si queres, pasamelo y seguimos por aca.";
+  return `Por ahora necesito ${missingContactDetails} para dejar el contacto cargado. Si queres, pasamelos y seguimos por aca.`;
 }
 
 function hasUnsupportedOperationalClaim(message) {
@@ -912,6 +959,17 @@ function buildUnsupportedMediaReply(messageType) {
   }
 
   return "Por aca no podemos recibir imagenes. Si queres, contame por texto y te ayudo.";
+}
+
+function isUnsupportedMediaMessage(messageType, messageText = "") {
+  const normalizedType = String(messageType || "").trim().toLowerCase();
+
+  if (normalizedType === "image" || normalizedType === "sticker") {
+    return true;
+  }
+
+  const normalizedText = normalizeLeadSignalText(messageText);
+  return normalizedText.includes("envio una foto por whatsapp") || normalizedText.includes("envio un sticker por whatsapp");
 }
 
 function looksLikeGreetingOnly(message) {
@@ -1158,6 +1216,8 @@ function updateKnownContactState(runtimeState, contactId, updates = {}) {
       String(updates?.confirmedName || existingContact.confirmedName || "").trim() || null,
     confirmedPhone:
       String(updates?.confirmedPhone || existingContact.confirmedPhone || "").trim() || null,
+    contactPreference:
+      String(updates?.contactPreference || existingContact.contactPreference || "").trim() || null,
     leadInterest:
       String(updates?.leadInterest || existingContact.leadInterest || "").trim() || null,
     leadSentAt: updates?.leadSentAt || existingContact.leadSentAt || null,
@@ -1177,15 +1237,17 @@ function getKnownLeadSnapshot(runtimeState, contactId) {
 
   const confirmedName = String(knownContact.confirmedName || "").trim();
   const confirmedPhone = String(knownContact.confirmedPhone || "").trim();
+  const contactPreference = String(knownContact.contactPreference || "").trim();
   const leadSentAt = String(knownContact.leadSentAt || "").trim();
 
-  if (!confirmedName && !confirmedPhone && !leadSentAt) {
+  if (!confirmedName && !confirmedPhone && !contactPreference && !leadSentAt) {
     return null;
   }
 
   return {
     confirmedName: confirmedName || null,
     confirmedPhone: confirmedPhone || null,
+    contactPreference: contactPreference || null,
     leadInterest: String(knownContact.leadInterest || "").trim() || null,
     leadSentAt: leadSentAt || null,
   };
@@ -1280,6 +1342,7 @@ async function enviarEmailLead(
   telefono,
   interes,
   presupuesto,
+  preferenciaContacto = null,
   whatsappOrigen = null,
   contactName = null
 ) {
@@ -1308,6 +1371,7 @@ Telefono brindado: ${phoneText}
 WhatsApp de origen: ${originText}
 Interes: ${interes || "No especificado"}
 Presupuesto: ${presupuesto || "No informado"}
+Preferencia de contacto: ${preferenciaContacto || "No informada"}
 `;
 
     if (resend && resendFrom) {
@@ -1551,11 +1615,14 @@ async function processQualifiedLead(
   const resolvedName = String(data.nombre || knownLeadSnapshot?.confirmedName || "").trim() || "No informado";
   const resolvedPhone =
     String(data.telefono || knownLeadSnapshot?.confirmedPhone || from || "").trim() || "No informado";
+  const resolvedContactPreference =
+    String(data.preferencia_contacto || knownLeadSnapshot?.contactPreference || "").trim() || "No informada";
   const contactName = String(contactProfile?.profileName || "").trim() || null;
   updateKnownContactState(runtimeState, from, {
     profileName: contactName,
     confirmedName: resolvedName !== "No informado" ? resolvedName : null,
     confirmedPhone: resolvedPhone,
+    contactPreference: resolvedContactPreference !== "No informada" ? resolvedContactPreference : null,
     leadInterest: data.interes || null,
     leadSentAt: new Date().toISOString(),
   });
@@ -1571,6 +1638,7 @@ async function processQualifiedLead(
     whatsappOrigen: from || "No informado",
     interes: data.interes || "Interesado",
     presupuesto: data.presupuesto || "No informado",
+    preferenciaContacto: resolvedContactPreference,
   });
 
   await guardarLead(
@@ -1587,6 +1655,7 @@ async function processQualifiedLead(
     resolvedPhone,
     data.interes || "Interesado",
     data.presupuesto || "No informado",
+    resolvedContactPreference,
     from,
     contactName
   );
@@ -1769,8 +1838,8 @@ async function processWebhookMessage(config, value, messageData) {
   const historial = getConversationHistory(runtimeState, from);
   const hasAssistantHistory = historial.some((item) => item.role === "assistant");
 
-  if (messageType === "image" || messageType === "sticker") {
-    const mediaReply = buildUnsupportedMediaReply(messageType);
+  if (isUnsupportedMediaMessage(messageType, mensaje)) {
+    const mediaReply = buildUnsupportedMediaReply(inferUnsupportedMediaReplyType(messageType, mensaje));
 
     historial.push({ role: "user", content: mensaje });
     historial.push({ role: "assistant", content: mediaReply });
@@ -1839,17 +1908,30 @@ async function processWebhookMessage(config, value, messageData) {
   });
 
   const respuestaCruda = response.choices[0]?.message?.content || "";
-  let data = {
+  const emptyLeadData = {
     mensaje: respuestaCruda,
     lead_calificado: false,
     nombre: null,
     telefono: null,
+    preferencia_contacto: null,
     interes: null,
     presupuesto: null,
   };
+  let data = { ...emptyLeadData };
 
   try {
-    data = JSON.parse(respuestaCruda);
+    const parsedData = JSON.parse(respuestaCruda);
+    data = {
+      ...emptyLeadData,
+      ...parsedData,
+      mensaje: parsedData?.mensaje || respuestaCruda || "Perfecto, contame un poco mas y te ayudo.",
+      lead_calificado: Boolean(parsedData?.lead_calificado),
+      nombre: parsedData?.nombre || null,
+      telefono: parsedData?.telefono || null,
+      preferencia_contacto: parsedData?.preferencia_contacto || null,
+      interes: parsedData?.interes || null,
+      presupuesto: parsedData?.presupuesto || null,
+    };
   } catch {
     const match = respuestaCruda.match(/\{[\s\S]*\}/);
 
@@ -1865,19 +1947,16 @@ async function processWebhookMessage(config, value, messageData) {
           lead_calificado: Boolean(jsonExtraido.lead_calificado),
           nombre: jsonExtraido.nombre || null,
           telefono: jsonExtraido.telefono || null,
+          preferencia_contacto: jsonExtraido.preferencia_contacto || null,
           interes: jsonExtraido.interes || null,
           presupuesto: jsonExtraido.presupuesto || null,
         };
       } catch {
         data = {
+          ...emptyLeadData,
           mensaje:
             respuestaCruda.replace(/\{[\s\S]*\}/, "").trim() ||
             "Perfecto, contame un poco mas y te ayudo.",
-          lead_calificado: false,
-          nombre: null,
-          telefono: null,
-          interes: null,
-          presupuesto: null,
         };
       }
     }
