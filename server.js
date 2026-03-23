@@ -509,6 +509,24 @@ function enrichLeadData(cliente, userMessage, parsedData, history = []) {
   return enrichedData;
 }
 
+function mergeKnownLeadSnapshot(parsedData, knownLeadSnapshot) {
+  if (!knownLeadSnapshot) {
+    return { ...parsedData };
+  }
+
+  return {
+    ...parsedData,
+    nombre: parsedData?.nombre || knownLeadSnapshot.confirmedName || null,
+    telefono: parsedData?.telefono || knownLeadSnapshot.confirmedPhone || null,
+    interes: parsedData?.interes || knownLeadSnapshot.leadInterest || null,
+  };
+}
+
+function buildLeadDispatchKey(clienteId, from, interes) {
+  const normalizedInterest = normalizeLeadSignalText(interes || "general").replace(/\s+/g, "-") || "general";
+  return `${clienteId}:${from}:${normalizedInterest}`;
+}
+
 function looksLikeQualifiedLead(userMessage, parsedData, assistantMessage) {
   const userText = normalizeLeadSignalText(userMessage);
   const assistantText = normalizeLeadSignalText(assistantMessage);
@@ -837,6 +855,26 @@ function buildSafeLeadContinuationReply(parsedData, knownLeadSnapshot, meetingRe
   }
 
   return "Por ahora solo necesito tu telefono para dejar el contacto cargado. Si queres, pasamelo y seguimos por aca.";
+}
+
+function hasUnsupportedOperationalClaim(message) {
+  const normalizedMessage = normalizeLeadSignalText(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  return [
+    /\bprocedere a registrar\b/,
+    /\bvoy a gestionar\b/,
+    /\bgestionare la informacion\b/,
+    /\btu plan esta en marcha\b/,
+    /\bya active\b/,
+    /\bya quedo activado\b/,
+    /\bregistro completado\b/,
+    /\bactivacion en curso\b/,
+    /\bpuesta en marcha\b/,
+  ].some((pattern) => pattern.test(normalizedMessage));
 }
 
 function isRequestingKnownContactData(message, knownLeadSnapshot) {
@@ -1736,7 +1774,7 @@ async function processWebhookMessage(config, value, messageData) {
     }
   }
 
-  data = enrichLeadData(cliente, mensaje, data, historial);
+  data = mergeKnownLeadSnapshot(enrichLeadData(cliente, mensaje, data, historial), knownLeadSnapshot);
   const meetingRequested = mentionsMeetingIntent(mensaje, data?.mensaje, data?.interes);
   const meetingLabel = inferMeetingLabel(mensaje, data?.interes, data?.mensaje);
   const hasMeetingContactReady =
@@ -1773,6 +1811,21 @@ async function processWebhookMessage(config, value, messageData) {
     );
   }
 
+  if (meetingRequested && !hasPastSchedulingConflict) {
+    data.mensaje = buildMeetingLeadReply(data, knownLeadSnapshot, mensaje, data?.interes, data?.mensaje);
+  }
+
+  if (hasUnsupportedOperationalClaim(data?.mensaje || "")) {
+    data.mensaje = buildSafeLeadContinuationReply(
+      data,
+      knownLeadSnapshot,
+      meetingRequested,
+      mensaje,
+      data?.interes,
+      data?.mensaje
+    );
+  }
+
   data.lead_calificado = hasPastSchedulingConflict
     ? false
     : (Boolean(data.lead_calificado) && hasLeadContactData(data)) ||
@@ -1791,7 +1844,7 @@ async function processWebhookMessage(config, value, messageData) {
     normalizeAssistantTone(sanitizeAssistantReply(rawReply)),
     knownLeadSnapshot
   );
-  const leadKey = `${cliente.id}:${from}`;
+  const leadKey = buildLeadDispatchKey(cliente.id, from, data?.interes);
 
   historial.push({ role: "user", content: mensaje });
   historial.push({ role: "assistant", content: mensajeFinal });
