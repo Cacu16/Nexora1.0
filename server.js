@@ -396,6 +396,8 @@ Modo premium de atencion y ventas:
 - Si ya tienes nombre y telefono confirmados en esta conversacion, no vuelvas a pedirlos.
 - Si el lead ya fue enviado al equipo, no digas que faltan datos de contacto ni afirmes que no los tienes.
 - Solo vuelve a preguntar nombre o telefono si el cliente aclara que quiere corregirlos o cambiarlos.
+- Si el cliente quiere coordinar una reunion, llamada o demo comercial, no respondas que no puedes agendar.
+- En ese caso, captura nombre y telefono si faltan y deja la conversacion lista para que un asesor lo contacte a la brevedad y confirme esa reunion.
 - Habla siempre en espanol rioplatense real: preferi "aca", "decime", "contame", "si queres", "dale", "buenisimo", "podes".
 - Evita palabras o giros neutros o demasiado formales como "aqui", "puedes", "de acuerdo", "indiqueme", "podria", "si deseas", "comprendo".
 - Nunca te describas como IA, inteligencia artificial, asistente virtual, bot o modelo.
@@ -410,6 +412,8 @@ Nunca prometas enviar despues demos, detalles, informacion adicional, catalogos,
 presupuestos personalizados ni seguimiento humano si esa accion no existe de forma explicita en la configuracion.
 Si el cliente pide mas informacion, respondela ahora mismo dentro del chat usando solo lo que esta cargado.
 No digas "te mando", "te envio", "te paso", "te comparto" ni "te agendo una demo" para cosas no habilitadas.
+Nunca pidas razon social, CIF, NIF, CUIT, CUIL, identificacion fiscal, direccion de facturacion,
+domicilio fiscal, datos bancarios ni documentacion operativa si eso no esta explicitamente configurado.
 Si el catalogo del cliente esta cargado en "Planes disponibles", tomalo como catalogo cerrado:
 no inventes productos, marcas, variedades, presentaciones ni precios fuera de esa lista.
 
@@ -597,11 +601,17 @@ function buildFarewellReply(parsedData) {
   return `Saludos${greetingTarget}, si necesitas algo mas estamos en contacto.`;
 }
 
-function buildQualifiedLeadReply(cliente, parsedData) {
+function buildQualifiedLeadReply(cliente, parsedData, options = {}) {
   const customerName = String(parsedData?.nombre || "").trim();
   const greetingTarget = customerName ? ` ${customerName}` : "";
   const interes = String(parsedData?.interes || "").trim();
   const orderTail = interes ? ` y tu pedido de ${interes}` : " y tu pedido";
+  const meetingRequested = Boolean(options?.meetingRequested);
+
+  if (meetingRequested) {
+    const meetingLabel = options?.meetingLabel || inferMeetingLabel(interes);
+    return `Perfecto${greetingTarget}. Ya deje tus datos para coordinar ${meetingLabel}. Un asesor te va a contactar a la brevedad para confirmarla.`;
+  }
 
   return `Perfecto${greetingTarget}. Ya guardamos tus datos de contacto${orderTail}. Un asesor te va a contactar a la brevedad para finalizar el proceso.`;
 }
@@ -715,6 +725,118 @@ function buildPastDateReply(pastDateReference) {
   const dateLabel = pastDateReference?.displayDate || pastDateReference?.matchedText || "la fecha que mencionaste";
 
   return `La fecha que mencionaste, ${dateLabel}, ya paso. Si queres coordinar una reunion o llamada, decime una fecha futura y lo seguimos por aca.`;
+}
+
+function mentionsMeetingIntent(...texts) {
+  const normalizedText = texts.map((text) => normalizeLeadSignalText(text)).join(" ");
+
+  if (!normalizedText.trim()) {
+    return false;
+  }
+
+  return [/\breunion\b/, /\bllamada\b/, /\bdemo\b/, /\bcita\b/, /\bcall\b/].some((pattern) =>
+    pattern.test(normalizedText)
+  );
+}
+
+function inferMeetingLabel(...texts) {
+  const normalizedText = texts.map((text) => normalizeLeadSignalText(text)).join(" ");
+
+  if (/\bdemo\b/.test(normalizedText)) {
+    return "la demo";
+  }
+
+  if (/\bllamada\b|\bcall\b/.test(normalizedText)) {
+    return "la llamada";
+  }
+
+  if (/\bcita\b/.test(normalizedText)) {
+    return "la cita";
+  }
+
+  return "la reunion";
+}
+
+function isMeetingRefusal(message) {
+  const normalizedMessage = normalizeLeadSignalText(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  return [
+    /\bno puedo agendar\b/,
+    /\bno puedo coordinar\b/,
+    /\bno puedo programar\b/,
+    /\bno puedo gestionar\b/,
+    /\bno es posible agendar\b/,
+    /\bno puedo confirmar reuniones?\b/,
+  ].some((pattern) => pattern.test(normalizedMessage));
+}
+
+function buildMeetingLeadReply(parsedData, knownLeadSnapshot, ...texts) {
+  const meetingLabel = inferMeetingLabel(...texts);
+  const knownName = String(parsedData?.nombre || knownLeadSnapshot?.confirmedName || "").trim();
+  const knownPhone = String(parsedData?.telefono || knownLeadSnapshot?.confirmedPhone || "").trim();
+
+  if (knownName && knownPhone) {
+    return `Perfecto${knownName ? ` ${knownName}` : ""}. Ya deje tus datos para coordinar ${meetingLabel}. Un asesor te va a contactar a la brevedad para confirmarla.`;
+  }
+
+  if (!knownName && !knownPhone) {
+    return `Si queres coordinar ${meetingLabel}, decime tu nombre y telefono y la dejo cargada para que un asesor te contacte y la confirme.`;
+  }
+
+  if (!knownName) {
+    return `Si queres coordinar ${meetingLabel}, decime tu nombre y la dejo cargada para que un asesor te contacte y la confirme.`;
+  }
+
+  return `Si queres coordinar ${meetingLabel}, decime tu telefono y la dejo cargada para que un asesor te contacte y la confirme.`;
+}
+
+function hasForbiddenSensitiveDataRequest(message) {
+  const normalizedMessage = normalizeLeadSignalText(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  return [
+    /\brazon social\b/,
+    /\bcif\b/,
+    /\bnif\b/,
+    /\bcuit\b/,
+    /\bcuil\b/,
+    /\bidentificacion fiscal\b/,
+    /\bnumero de identificacion fiscal\b/,
+    /\bdireccion de facturacion\b/,
+    /\bdomicilio fiscal\b/,
+    /\bdatos fiscales\b/,
+    /\bbilling\b/,
+  ].some((pattern) => pattern.test(normalizedMessage));
+}
+
+function buildSafeLeadContinuationReply(parsedData, knownLeadSnapshot, meetingRequested = false, ...texts) {
+  if (meetingRequested) {
+    return buildMeetingLeadReply(parsedData, knownLeadSnapshot, ...texts);
+  }
+
+  const knownName = String(parsedData?.nombre || knownLeadSnapshot?.confirmedName || "").trim();
+  const knownPhone = String(parsedData?.telefono || knownLeadSnapshot?.confirmedPhone || "").trim();
+
+  if (knownName && knownPhone) {
+    return "Con lo que ya me compartiste alcanza para dejarlo cargado. Un asesor te va a contactar a la brevedad para seguir y confirmar el proximo paso.";
+  }
+
+  if (!knownName && !knownPhone) {
+    return "Por ahora solo necesito tu nombre y telefono para dejar el contacto cargado. Si queres, pasamelos y seguimos por aca.";
+  }
+
+  if (!knownName) {
+    return "Por ahora solo necesito tu nombre para dejar el contacto cargado. Si queres, pasamelo y seguimos por aca.";
+  }
+
+  return "Por ahora solo necesito tu telefono para dejar el contacto cargado. Si queres, pasamelo y seguimos por aca.";
 }
 
 function isRequestingKnownContactData(message, knownLeadSnapshot) {
@@ -1145,6 +1267,13 @@ function guessFileExtensionFromMimeType(mimeType) {
   const normalizedMimeType = String(mimeType || "").trim().toLowerCase();
 
   switch (normalizedMimeType) {
+    case "image/jpeg":
+    case "image/jpg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    case "image/webp":
+      return ".webp";
     case "audio/ogg":
       return ".ogg";
     case "audio/opus":
@@ -1162,6 +1291,11 @@ function guessFileExtensionFromMimeType(mimeType) {
     default:
       return ".bin";
   }
+}
+
+function buildDataUrl(buffer, mimeType) {
+  const resolvedMimeType = String(mimeType || "").trim() || "application/octet-stream";
+  return `data:${resolvedMimeType};base64,${buffer.toString("base64")}`;
 }
 
 async function fetchWhatsappMediaMetadata(mediaId, whatsappToken) {
@@ -1214,6 +1348,44 @@ async function transcribeWhatsappAudioMessage(messageData, openai, whatsappToken
   return String(transcription?.text || transcription || "").trim() || null;
 }
 
+async function describeWhatsappImageMessage(messageData, openai, whatsappToken) {
+  const imageId = String(messageData?.image?.id || "").trim();
+
+  if (!imageId) {
+    return null;
+  }
+
+  const { buffer, mimeType } = await downloadWhatsappMedia(imageId, whatsappToken);
+  const imageDataUrl = buildDataUrl(buffer, mimeType || "image/jpeg");
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "Describe brevemente la imagen para un asistente comercial en espanol. Menciona solo lo visible o legible con alta confianza y evita inventar detalles.",
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Decime en una o dos frases que se ve, si hay texto legible relevante y cualquier contexto comercial util.",
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: imageDataUrl,
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  return String(response.choices?.[0]?.message?.content || "").trim() || null;
+}
+
 async function buildIncomingMessageInput(messageData, openai, whatsappToken) {
   const messageType = getIncomingMessageType(messageData);
 
@@ -1225,12 +1397,27 @@ async function buildIncomingMessageInput(messageData, openai, whatsappToken) {
       };
     case "image": {
       const caption = String(messageData?.image?.caption || "").trim();
-      return {
-        messageType,
-        userMessage: caption
-          ? `El cliente envio una foto por WhatsApp con este texto: "${caption}". No puedes ver la imagen, asi que no inventes su contenido visual.`
-          : "El cliente envio una foto por WhatsApp. No puedes ver la imagen, asi que no inventes su contenido visual. Responde de forma util y, si hace falta, pedi que te cuente que necesita o que describa la foto.",
-      };
+      try {
+        const imageDescription = await describeWhatsappImageMessage(messageData, openai, whatsappToken);
+        return {
+          messageType,
+          userMessage: [
+            "El cliente envio una foto por WhatsApp.",
+            imageDescription ? `Descripcion visual aproximada: "${imageDescription}".` : null,
+            caption ? `Texto adjunto por el cliente: "${caption}".` : null,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        };
+      } catch (error) {
+        console.error("Error describiendo imagen entrante:", error.response?.data || error.message || error);
+        return {
+          messageType,
+          userMessage: caption
+            ? `El cliente envio una foto por WhatsApp con este texto: "${caption}". No pude procesar bien la imagen, asi que responde sin inventar su contenido visual.`
+            : "El cliente envio una foto por WhatsApp. No pude procesar bien la imagen, asi que responde de forma util y, si hace falta, pedi que te cuente que necesita o que describa la foto.",
+        };
+      }
     }
     case "audio":
       try {
@@ -1550,6 +1737,18 @@ async function processWebhookMessage(config, value, messageData) {
   }
 
   data = enrichLeadData(cliente, mensaje, data, historial);
+  const meetingRequested = mentionsMeetingIntent(mensaje, data?.mensaje, data?.interes);
+  const meetingLabel = inferMeetingLabel(mensaje, data?.interes, data?.mensaje);
+  const hasMeetingContactReady =
+    meetingRequested &&
+    (hasLeadContactData(data) ||
+      (Boolean(String(knownLeadSnapshot?.confirmedName || "").trim()) &&
+        Boolean(String(knownLeadSnapshot?.confirmedPhone || "").trim())));
+
+  if (meetingRequested && shouldReplaceLeadInterest(data?.interes)) {
+    data.interes = `Solicitud de ${meetingLabel}`;
+  }
+
   const hasPastSchedulingConflict =
     Boolean(pastDateReference) &&
     mentionsSchedulingIntent(mensaje, data?.mensaje, data?.interes, data?.presupuesto);
@@ -1559,15 +1758,34 @@ async function processWebhookMessage(config, value, messageData) {
     data.mensaje = buildPastDateReply(pastDateReference);
   }
 
+  if (meetingRequested && isMeetingRefusal(data?.mensaje || "")) {
+    data.mensaje = buildMeetingLeadReply(data, knownLeadSnapshot, mensaje, data?.interes, data?.mensaje);
+  }
+
+  if (hasForbiddenSensitiveDataRequest(data?.mensaje || "")) {
+    data.mensaje = buildSafeLeadContinuationReply(
+      data,
+      knownLeadSnapshot,
+      meetingRequested,
+      mensaje,
+      data?.interes,
+      data?.mensaje
+    );
+  }
+
   data.lead_calificado = hasPastSchedulingConflict
     ? false
     : (Boolean(data.lead_calificado) && hasLeadContactData(data)) ||
       looksLikeQualifiedLead(mensaje, data, data.mensaje || "Perfecto, contame un poco mas y te ayudo.");
+
+  if (!hasPastSchedulingConflict && hasMeetingContactReady) {
+    data.lead_calificado = true;
+  }
   const isFarewell = looksLikeFarewellMessage(mensaje);
   const rawReply = isFarewell
     ? buildFarewellReply(data)
     : data.lead_calificado
-      ? buildQualifiedLeadReply(cliente, data)
+      ? buildQualifiedLeadReply(cliente, data, { meetingRequested, meetingLabel })
       : data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
   const mensajeFinal = sanitizeRepeatedLeadCapture(
     normalizeAssistantTone(sanitizeAssistantReply(rawReply)),
