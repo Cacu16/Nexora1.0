@@ -35,6 +35,36 @@ const DIST_DIR = path.join(__dirname, "dist");
 const DIST_INDEX = path.join(DIST_DIR, "index.html");
 let sheets = null;
 const openaiClients = new Map();
+const SPANISH_MONTH_INDEX = {
+  enero: 0,
+  febrero: 1,
+  marzo: 2,
+  abril: 3,
+  mayo: 4,
+  junio: 5,
+  julio: 6,
+  agosto: 7,
+  septiembre: 8,
+  setiembre: 8,
+  octubre: 9,
+  noviembre: 10,
+  diciembre: 11,
+};
+const SCHEDULING_SIGNAL_PATTERNS = [
+  /\breunion\b/,
+  /\breunirme\b/,
+  /\breunirnos\b/,
+  /\bagend(ar|o|amos|emos)\b/,
+  /\bagenda\b/,
+  /\bcoordin(ar|amos|emos|o)\b/,
+  /\bcoordinar\b/,
+  /\bllamada\b/,
+  /\bcall\b/,
+  /\bcita\b/,
+  /\bturno\b/,
+  /\bdemo\b/,
+  /\bvisita\b/,
+];
 
 function createEmailTransport() {
   const smtpHost = String(process.env.SMTP_HOST || "").trim();
@@ -86,6 +116,7 @@ function logWebhookEvent(payload) {
     payload.clientId || "sin-cliente",
     payload.phoneNumberId || "sin-phone-id",
     payload.from || "sin-from",
+    payload.contactName || "sin-contacto",
   ].join(" | ");
 
   console.log(`[webhook] ${summary}`);
@@ -142,8 +173,140 @@ function buildClientMainPrompt(basePrompt, cliente) {
   return String(basePrompt || "").replace(/\bNexora\b/gi, businessName).trim();
 }
 
+function startOfLocalDay(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function formatIsoDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatFullDate(date = new Date()) {
+  return new Intl.DateTimeFormat("es-AR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatShortDate(date = new Date()) {
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function normalizeYear(value, fallbackYear) {
+  const numericYear = Number(value);
+
+  if (!Number.isFinite(numericYear)) {
+    return fallbackYear;
+  }
+
+  return numericYear < 100 ? 2000 + numericYear : numericYear;
+}
+
+function buildValidDate(year, monthIndex, day) {
+  const candidate = new Date(year, monthIndex, day);
+
+  if (
+    Number.isNaN(candidate.getTime()) ||
+    candidate.getFullYear() !== year ||
+    candidate.getMonth() !== monthIndex ||
+    candidate.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return startOfLocalDay(candidate);
+}
+
+function detectPastDateReference(text, now = new Date()) {
+  const normalizedText = normalizeLeadSignalText(text);
+
+  if (!normalizedText) {
+    return null;
+  }
+
+  const today = startOfLocalDay(now);
+  const directPastReferences = [
+    "ayer",
+    "anteayer",
+    "la semana pasada",
+    "el mes pasado",
+    "el ano pasado",
+  ];
+
+  for (const reference of directPastReferences) {
+    if (normalizedText.includes(reference)) {
+      return {
+        kind: "relative",
+        matchedText: reference,
+        displayDate: null,
+      };
+    }
+  }
+
+  const weekdayPastMatch = normalizedText.match(
+    /\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\s+pasad[oa]\b/
+  );
+
+  if (weekdayPastMatch) {
+    return {
+      kind: "relative",
+      matchedText: weekdayPastMatch[0],
+      displayDate: null,
+    };
+  }
+
+  const numericDateRegex = /\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/g;
+
+  for (const match of normalizedText.matchAll(numericDateRegex)) {
+    const day = Number(match[1]);
+    const monthIndex = Number(match[2]) - 1;
+    const year = normalizeYear(match[3], today.getFullYear());
+    const candidate = buildValidDate(year, monthIndex, day);
+
+    if (candidate && candidate < today) {
+      return {
+        kind: "absolute",
+        matchedText: match[0],
+        displayDate: formatShortDate(candidate),
+      };
+    }
+  }
+
+  const textualDateRegex =
+    /\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{2,4}))?\b/g;
+
+  for (const match of normalizedText.matchAll(textualDateRegex)) {
+    const day = Number(match[1]);
+    const monthIndex = SPANISH_MONTH_INDEX[match[2]];
+    const year = normalizeYear(match[3], today.getFullYear());
+    const candidate = buildValidDate(year, monthIndex, day);
+
+    if (candidate && candidate < today) {
+      return {
+        kind: "absolute",
+        matchedText: match[0],
+        displayDate: formatShortDate(candidate),
+      };
+    }
+  }
+
+  return null;
+}
+
 function buildSystemPrompt(cliente, config, options = {}) {
   const hasAssistantHistory = Boolean(options?.hasAssistantHistory);
+  const currentDate = options?.currentDate instanceof Date ? options.currentDate : new Date();
+  const pastDateReference = options?.pastDateReference || null;
+  const knownLeadSnapshot = options?.knownLeadSnapshot || null;
   const promptNotes = Array.isArray(cliente.promptNotes) && cliente.promptNotes.length
     ? cliente.promptNotes.map((note) => `- ${note}`).join("\n")
     : "- Responde de forma clara, breve y natural.";
@@ -196,6 +359,26 @@ ${promptNotes}
 Tono:
 ${cliente.tono || "Claro y natural"}
 
+Fecha actual de referencia:
+- Hoy es ${formatFullDate(currentDate)}.
+- Fecha ISO actual: ${formatIsoDate(currentDate)}.
+
+Datos ya confirmados en esta conversacion:
+${knownLeadSnapshot
+    ? [
+        `- Nombre ya confirmado: ${knownLeadSnapshot.confirmedName || "No informado"}`,
+        `- Telefono ya confirmado: ${knownLeadSnapshot.confirmedPhone || "No informado"}`,
+        knownLeadSnapshot.leadInterest
+          ? `- Interes registrado: ${knownLeadSnapshot.leadInterest}`
+          : null,
+        knownLeadSnapshot.leadSentAt
+          ? `- Este lead ya fue enviado al equipo el ${knownLeadSnapshot.leadSentAt}.`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "- Aun no hay datos de contacto confirmados para este chat."}
+
 PROMPT ESPECIFICO DEL CLIENTE:
 ${clientPrompt || "Sin instrucciones extra para este cliente."}
 
@@ -207,6 +390,15 @@ Modo premium de atencion y ventas:
 - Cuando haya intencion real de compra o contratacion, intenta capturar nombre y telefono.
 - Pide un solo dato por vez y solo el minimo necesario para avanzar.
 - Si ya tienes suficiente contexto para recomendar, no hagas preguntas innecesarias.
+- Si el cliente menciona una fecha u horario que ya paso respecto de hoy, no lo confirmes ni lo agendes.
+- Si el cliente propone una fecha pasada, explicale claramente que esa fecha ya paso y pedi una nueva fecha futura.
+- Si el cliente usa referencias relativas como "ayer", "la semana pasada", "el lunes pasado" o una fecha tipo "10/03", interpretalas usando la fecha actual indicada arriba.
+- Si ya tienes nombre y telefono confirmados en esta conversacion, no vuelvas a pedirlos.
+- Si el lead ya fue enviado al equipo, no digas que faltan datos de contacto ni afirmes que no los tienes.
+- Solo vuelve a preguntar nombre o telefono si el cliente aclara que quiere corregirlos o cambiarlos.
+- Habla siempre en espanol rioplatense real: preferi "aca", "decime", "contame", "si queres", "dale", "buenisimo", "podes".
+- Evita palabras o giros neutros o demasiado formales como "aqui", "puedes", "de acuerdo", "indiqueme", "podria", "si deseas", "comprendo".
+- Nunca te describas como IA, inteligencia artificial, asistente virtual, bot o modelo.
 
 IMPORTANTE:
 Responde SOLO con JSON valido.
@@ -214,6 +406,10 @@ No agregues texto antes ni despues del JSON.
 No escribas la palabra json ni explicaciones extra.
 Nunca menciones cuentas bancarias, alias, CBU, CVU, links de pago, confirmacion de pedido,
 entrega, retiro o stock confirmado si esa informacion no esta escrita en la configuracion del cliente.
+Nunca prometas enviar despues demos, detalles, informacion adicional, catalogos, archivos, links, material,
+presupuestos personalizados ni seguimiento humano si esa accion no existe de forma explicita en la configuracion.
+Si el cliente pide mas informacion, respondela ahora mismo dentro del chat usando solo lo que esta cargado.
+No digas "te mando", "te envio", "te paso", "te comparto" ni "te agendo una demo" para cosas no habilitadas.
 Si el catalogo del cliente esta cargado en "Planes disponibles", tomalo como catalogo cerrado:
 no inventes productos, marcas, variedades, presentaciones ni precios fuera de esa lista.
 
@@ -234,6 +430,9 @@ Reglas para completar el JSON:
 - "interes" debe resumir con precision que quiere comprar o contratar el cliente; si es un producto o plan puntual, nombra ese producto o plan.
 - "presupuesto" solo si el cliente lo menciono.
 - Si falta nombre o telefono, no marques lead_calificado y usalos en "mensaje" para pedir el siguiente dato faltante con naturalidad.
+${pastDateReference
+    ? `- Atencion: en el ultimo mensaje el cliente menciono una fecha pasada (${pastDateReference.displayDate || pastDateReference.matchedText}). No la tomes como valida ni confirmes una reunion con esa fecha.`
+    : ""}
 
 Planes disponibles:
 ${buildPlanesText(cliente)}
@@ -407,6 +606,157 @@ function buildQualifiedLeadReply(cliente, parsedData) {
   return `Perfecto${greetingTarget}. Ya guardamos tus datos de contacto${orderTail}. Un asesor te va a contactar a la brevedad para finalizar el proceso.`;
 }
 
+function hasUnsupportedPromise(message) {
+  const normalizedMessage = normalizeLeadSignalText(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  const promisePatterns = [
+    /\bdemo\b/,
+    /\bdetalles?\b/,
+    /\bmas info\b/,
+    /\binformacion adicional\b/,
+    /\bcatalogo\b/,
+    /\bmaterial\b/,
+    /\bbrochure\b/,
+    /\bpdf\b/,
+    /\blink\b/,
+    /\blinks\b/,
+  ];
+  const futureSendPatterns = [
+    /\bte (mando|envio|paso|comparto)\b/,
+    /\bte voy a (mandar|enviar|pasar|compartir)\b/,
+    /\bte podemos? (mandar|enviar|pasar|compartir)\b/,
+    /\bagend(ar|amos|o|emos)\b/,
+  ];
+
+  return (
+    promisePatterns.some((pattern) => pattern.test(normalizedMessage)) &&
+    futureSendPatterns.some((pattern) => pattern.test(normalizedMessage))
+  );
+}
+
+function sanitizeAssistantReply(message) {
+  const trimmedMessage = String(message || "").trim();
+
+  if (!trimmedMessage) {
+    return "Contame un poco mas y te ayudo por aca con la informacion disponible.";
+  }
+
+  if (!hasUnsupportedPromise(trimmedMessage)) {
+    return trimmedMessage;
+  }
+
+  return "Te cuento todo por aca con la informacion disponible. Decime que parte te interesa y te respondo sin prometer envios ni demos.";
+}
+
+function normalizeAssistantTone(message) {
+  const trimmedMessage = String(message || "").trim();
+
+  if (!trimmedMessage) {
+    return trimmedMessage;
+  }
+
+  const aiDisclosurePatterns = [
+    /\bcomo (ia|inteligencia artificial)\b/gi,
+    /\bsoy (una )?(ia|inteligencia artificial|un bot|un chatbot|un asistente virtual|un modelo de lenguaje)\b/gi,
+    /\bestoy programad[oa] para\b/gi,
+    /\bno tengo la capacidad de\b/gi,
+  ];
+  const neutralReplacements = [
+    [/\baqui\b/gi, "aca"],
+    [/\baquí\b/gi, "aca"],
+    [/\bpuedes\b/gi, "podes"],
+    [/\bsi deseas\b/gi, "si queres"],
+    [/\bsi desea\b/gi, "si queres"],
+    [/\bdeseas\b/gi, "queres"],
+    [/\bde acuerdo\b/gi, "dale"],
+    [/\bindicame\b/gi, "decime"],
+    [/\bindícame\b/gi, "decime"],
+    [/\bindiqueme\b/gi, "decime"],
+    [/\bindíqueme\b/gi, "decime"],
+    [/\bcomprendo\b/gi, "entiendo"],
+    [/\bpuedo ayudarte desde aqui\b/gi, "te ayudo por aca"],
+    [/\bestoy aqui para ayudarte\b/gi, "estoy por aca para ayudarte"],
+  ];
+
+  let normalizedMessage = trimmedMessage;
+
+  for (const pattern of aiDisclosurePatterns) {
+    normalizedMessage = normalizedMessage.replace(pattern, "");
+  }
+
+  for (const [pattern, replacement] of neutralReplacements) {
+    normalizedMessage = normalizedMessage.replace(pattern, replacement);
+  }
+
+  normalizedMessage = normalizedMessage
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/^[,.;:\s-]+/g, "")
+    .trim();
+
+  return normalizedMessage || "Estoy por aca para ayudarte en lo que necesites.";
+}
+
+function mentionsSchedulingIntent(...texts) {
+  const normalizedText = texts.map((text) => normalizeLeadSignalText(text)).join(" ");
+
+  if (!normalizedText.trim()) {
+    return false;
+  }
+
+  return SCHEDULING_SIGNAL_PATTERNS.some((pattern) => pattern.test(normalizedText));
+}
+
+function buildPastDateReply(pastDateReference) {
+  const dateLabel = pastDateReference?.displayDate || pastDateReference?.matchedText || "la fecha que mencionaste";
+
+  return `La fecha que mencionaste, ${dateLabel}, ya paso. Si queres coordinar una reunion o llamada, decime una fecha futura y lo seguimos por aca.`;
+}
+
+function isRequestingKnownContactData(message, knownLeadSnapshot) {
+  const normalizedMessage = normalizeLeadSignalText(message);
+
+  if (!normalizedMessage || !knownLeadSnapshot?.leadSentAt) {
+    return false;
+  }
+
+  const hasKnownContactData =
+    Boolean(String(knownLeadSnapshot?.confirmedName || "").trim()) &&
+    Boolean(String(knownLeadSnapshot?.confirmedPhone || "").trim());
+
+  if (!hasKnownContactData) {
+    return false;
+  }
+
+  const repeatedContactRequestPatterns = [
+    /\b(nombre y telefono|telefono y nombre)\b/,
+    /\b(decime|pasame|compartime|dejame|indicame|necesito)\b[\s\S]{0,40}\b(nombre|telefono|numero|contacto)\b/,
+    /\b(me falta|faltaria|necesito tener)\b[\s\S]{0,40}\b(nombre|telefono|numero|contacto)\b/,
+    /\bno (tengo|tendria|me pasaste|recibi)\b[\s\S]{0,20}\b(nombre|telefono|numero|contacto|datos)\b/,
+    /\bpara avanzar\b[\s\S]{0,40}\b(nombre|telefono|numero|contacto)\b/,
+  ];
+
+  return repeatedContactRequestPatterns.some((pattern) => pattern.test(normalizedMessage));
+}
+
+function sanitizeRepeatedLeadCapture(message, knownLeadSnapshot) {
+  const trimmedMessage = String(message || "").trim();
+
+  if (!trimmedMessage) {
+    return trimmedMessage;
+  }
+
+  if (!isRequestingKnownContactData(trimmedMessage, knownLeadSnapshot)) {
+    return trimmedMessage;
+  }
+
+  return "Ya tengo tus datos de contacto cargados. Si queres corregir alguno, decimelo; si no, contame que mas necesitas y sigo por aca.";
+}
+
 function resolveVerifyToken(config = getConfig()) {
   return String(
     process.env.WEBHOOK_VERIFY_TOKEN || config?.webhookVerifyToken || DEFAULT_VERIFY_TOKEN
@@ -439,10 +789,17 @@ function getClientRuntimeState(clienteId) {
       historialPorContacto: new Map(),
       mensajesProcesados: new Set(),
       leadsEnviados: new Set(),
+      contactosPorTelefono: new Map(),
     });
   }
 
-  return clientRuntime.get(clienteId);
+  const runtimeState = clientRuntime.get(clienteId);
+
+  if (!runtimeState.contactosPorTelefono) {
+    runtimeState.contactosPorTelefono = new Map();
+  }
+
+  return runtimeState;
 }
 
 function moveClientRuntimeState(previousId, nextId) {
@@ -473,6 +830,105 @@ function getConversationHistory(runtimeState, contactId) {
   }
 
   return runtimeState.historialPorContacto.get(contactId);
+}
+
+function extractInboundContactProfile(value, from) {
+  const contactId = String(from || "").trim();
+  const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
+  const matchedContact =
+    contacts.find((contact) => String(contact?.wa_id || "").trim() === contactId) || contacts[0] || null;
+
+  if (!matchedContact) {
+    return null;
+  }
+
+  const profileName = String(
+    matchedContact?.profile?.name || matchedContact?.name || matchedContact?.display_name || ""
+  ).trim();
+
+  return {
+    waId: String(matchedContact?.wa_id || contactId).trim(),
+    profileName: profileName || null,
+  };
+}
+
+function rememberContactProfile(runtimeState, contactProfile) {
+  const waId = String(contactProfile?.waId || "").trim();
+
+  if (!runtimeState || !waId) {
+    return null;
+  }
+
+  const existingContact = runtimeState.contactosPorTelefono.get(waId) || {};
+  const mergedContact = {
+    waId,
+    profileName: String(contactProfile?.profileName || existingContact.profileName || "").trim() || null,
+    lastSeenAt: new Date().toISOString(),
+  };
+
+  runtimeState.contactosPorTelefono.set(waId, mergedContact);
+  return mergedContact;
+}
+
+function getKnownContactProfile(runtimeState, contactId) {
+  const waId = String(contactId || "").trim();
+
+  if (!runtimeState || !waId || !runtimeState.contactosPorTelefono.has(waId)) {
+    return null;
+  }
+
+  return runtimeState.contactosPorTelefono.get(waId);
+}
+
+function updateKnownContactState(runtimeState, contactId, updates = {}) {
+  const waId = String(contactId || updates?.waId || "").trim();
+
+  if (!runtimeState || !waId) {
+    return null;
+  }
+
+  const existingContact = runtimeState.contactosPorTelefono.get(waId) || { waId };
+  const mergedContact = {
+    ...existingContact,
+    ...updates,
+    waId,
+    profileName:
+      String(updates?.profileName || existingContact.profileName || "").trim() || null,
+    confirmedName:
+      String(updates?.confirmedName || existingContact.confirmedName || "").trim() || null,
+    confirmedPhone:
+      String(updates?.confirmedPhone || existingContact.confirmedPhone || "").trim() || null,
+    leadInterest:
+      String(updates?.leadInterest || existingContact.leadInterest || "").trim() || null,
+    leadSentAt: updates?.leadSentAt || existingContact.leadSentAt || null,
+    lastSeenAt: updates?.lastSeenAt || existingContact.lastSeenAt || new Date().toISOString(),
+  };
+
+  runtimeState.contactosPorTelefono.set(waId, mergedContact);
+  return mergedContact;
+}
+
+function getKnownLeadSnapshot(runtimeState, contactId) {
+  const knownContact = getKnownContactProfile(runtimeState, contactId);
+
+  if (!knownContact) {
+    return null;
+  }
+
+  const confirmedName = String(knownContact.confirmedName || "").trim();
+  const confirmedPhone = String(knownContact.confirmedPhone || "").trim();
+  const leadSentAt = String(knownContact.leadSentAt || "").trim();
+
+  if (!confirmedName && !confirmedPhone && !leadSentAt) {
+    return null;
+  }
+
+  return {
+    confirmedName: confirmedName || null,
+    confirmedPhone: confirmedPhone || null,
+    leadInterest: String(knownContact.leadInterest || "").trim() || null,
+    leadSentAt: leadSentAt || null,
+  };
 }
 
 function buildClientStatus(cliente, config = getConfig()) {
@@ -564,7 +1020,8 @@ async function enviarEmailLead(
   telefono,
   interes,
   presupuesto,
-  whatsappOrigen = null
+  whatsappOrigen = null,
+  contactName = null
 ) {
   const businessLabel = cliente?.businessName || cliente?.nombre || "NEXORA";
   const resendFrom = String(process.env.EMAIL_FROM || "").trim();
@@ -582,9 +1039,11 @@ async function enviarEmailLead(
     const subject = `Nuevo lead - ${businessLabel}`;
     const phoneText = telefono || "No informado";
     const originText = whatsappOrigen || "No informado";
+    const whatsappContactName = contactName || "No informado";
     const text = `
 Cliente: ${businessLabel}
 Nombre: ${nombre || "No informado"}
+Nombre de perfil en WhatsApp: ${whatsappContactName}
 Telefono brindado: ${phoneText}
 WhatsApp de origen: ${originText}
 Interes: ${interes || "No especificado"}
@@ -639,16 +1098,193 @@ async function responderWhatsapp(phoneNumberId, to, body, whatsappToken) {
   );
 }
 
-async function processQualifiedLead(cliente, runtimeState, leadKey, from, data) {
+function getIncomingMessageType(messageData) {
+  const explicitType = String(messageData?.type || "").trim().toLowerCase();
+
+  if (explicitType) {
+    return explicitType;
+  }
+
+  if (messageData?.text?.body) {
+    return "text";
+  }
+
+  if (messageData?.audio?.id) {
+    return "audio";
+  }
+
+  if (messageData?.image?.id) {
+    return "image";
+  }
+
+  if (messageData?.sticker?.id) {
+    return "sticker";
+  }
+
+  return "unknown";
+}
+
+function buildIncomingMessagePreview(messageData, messageType = getIncomingMessageType(messageData)) {
+  switch (messageType) {
+    case "text":
+      return String(messageData?.text?.body || "").trim();
+    case "image": {
+      const caption = String(messageData?.image?.caption || "").trim();
+      return caption ? `[imagen] ${caption}` : "[imagen sin texto]";
+    }
+    case "audio":
+      return "[audio]";
+    case "sticker":
+      return "[sticker]";
+    default:
+      return `[${messageType}]`;
+  }
+}
+
+function guessFileExtensionFromMimeType(mimeType) {
+  const normalizedMimeType = String(mimeType || "").trim().toLowerCase();
+
+  switch (normalizedMimeType) {
+    case "audio/ogg":
+      return ".ogg";
+    case "audio/opus":
+      return ".opus";
+    case "audio/mpeg":
+      return ".mp3";
+    case "audio/mp4":
+    case "audio/aac":
+      return ".m4a";
+    case "audio/wav":
+    case "audio/x-wav":
+      return ".wav";
+    case "audio/amr":
+      return ".amr";
+    default:
+      return ".bin";
+  }
+}
+
+async function fetchWhatsappMediaMetadata(mediaId, whatsappToken) {
+  const response = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
+    headers: {
+      Authorization: `Bearer ${whatsappToken}`,
+    },
+  });
+
+  return response.data || {};
+}
+
+async function downloadWhatsappMedia(mediaId, whatsappToken) {
+  const metadata = await fetchWhatsappMediaMetadata(mediaId, whatsappToken);
+  const mediaUrl = String(metadata?.url || "").trim();
+
+  if (!mediaUrl) {
+    throw new Error(`Meta no devolvio URL para el media ${mediaId}`);
+  }
+
+  const response = await axios.get(mediaUrl, {
+    responseType: "arraybuffer",
+    headers: {
+      Authorization: `Bearer ${whatsappToken}`,
+    },
+  });
+
+  return {
+    buffer: Buffer.from(response.data),
+    mimeType: String(metadata?.mime_type || response.headers?.["content-type"] || "").trim(),
+  };
+}
+
+async function transcribeWhatsappAudioMessage(messageData, openai, whatsappToken) {
+  const audioId = String(messageData?.audio?.id || "").trim();
+
+  if (!audioId) {
+    return null;
+  }
+
+  const { buffer, mimeType } = await downloadWhatsappMedia(audioId, whatsappToken);
+  const extension = guessFileExtensionFromMimeType(mimeType);
+  const transcription = await openai.audio.transcriptions.create({
+    file: await OpenAI.toFile(buffer, `whatsapp-audio${extension}`, {
+      type: mimeType || "application/octet-stream",
+    }),
+    model: "gpt-4o-mini-transcribe",
+  });
+
+  return String(transcription?.text || transcription || "").trim() || null;
+}
+
+async function buildIncomingMessageInput(messageData, openai, whatsappToken) {
+  const messageType = getIncomingMessageType(messageData);
+
+  switch (messageType) {
+    case "text":
+      return {
+        messageType,
+        userMessage: String(messageData?.text?.body || "").trim(),
+      };
+    case "image": {
+      const caption = String(messageData?.image?.caption || "").trim();
+      return {
+        messageType,
+        userMessage: caption
+          ? `El cliente envio una foto por WhatsApp con este texto: "${caption}". No puedes ver la imagen, asi que no inventes su contenido visual.`
+          : "El cliente envio una foto por WhatsApp. No puedes ver la imagen, asi que no inventes su contenido visual. Responde de forma util y, si hace falta, pedi que te cuente que necesita o que describa la foto.",
+      };
+    }
+    case "audio":
+      try {
+        const audioKind = messageData?.audio?.voice ? "audio de voz" : "audio";
+        const transcription = await transcribeWhatsappAudioMessage(messageData, openai, whatsappToken);
+
+        return {
+          messageType,
+          userMessage: transcription
+            ? `El cliente envio un ${audioKind} por WhatsApp. Transcripcion aproximada: "${transcription}".`
+            : `El cliente envio un ${audioKind} por WhatsApp, pero no se pudo transcribir con claridad. Responde de forma util y pedi que lo mande de nuevo o por escrito si hace falta.`,
+        };
+      } catch (error) {
+        console.error("Error preparando audio entrante:", error.response?.data || error.message || error);
+        return {
+          messageType,
+          userMessage:
+            "El cliente envio un audio por WhatsApp, pero no se pudo procesar. Responde de forma util y pedi que lo mande de nuevo o por escrito si hace falta.",
+        };
+      }
+    case "sticker":
+      return {
+        messageType,
+        userMessage:
+          "El cliente envio un sticker por WhatsApp. Responde natural segun el contexto y, si hace falta, invitalo a contarte en texto que necesita.",
+      };
+    default:
+      return {
+        messageType,
+        userMessage:
+          "El cliente envio un mensaje de WhatsApp en un formato no textual. Responde de forma util y pedi que te lo mande por texto si necesitas mas detalle.",
+      };
+  }
+}
+
+async function processQualifiedLead(cliente, runtimeState, leadKey, from, data, contactProfile = null) {
   runtimeState.leadsEnviados.add(leadKey);
   const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
   const resolvedPhone = String(data.telefono || from || "").trim() || "No informado";
+  const contactName = String(contactProfile?.profileName || "").trim() || null;
+  updateKnownContactState(runtimeState, from, {
+    profileName: contactName,
+    confirmedName: data.nombre || null,
+    confirmedPhone: resolvedPhone,
+    leadInterest: data.interes || null,
+    leadSentAt: new Date().toISOString(),
+  });
 
   persistLeadEvent({
     clientId: cliente.id,
     businessName: cliente.businessName || cliente.nombre || "NEXORA",
     toEmail: leadEmail,
     from,
+    contactName,
     nombre: data.nombre || "No informado",
     telefono: resolvedPhone,
     whatsappOrigen: from || "No informado",
@@ -670,7 +1306,8 @@ async function processQualifiedLead(cliente, runtimeState, leadKey, from, data) 
     resolvedPhone,
     data.interes || "Interesado",
     data.presupuesto || "No informado",
-    from
+    from,
+    contactName
   );
 }
 
@@ -780,32 +1417,44 @@ app.get("/webhook", (req, res) => {
 
 async function processWebhookMessage(config, value, messageData) {
   const messageId = messageData.id;
-
-  if (!messageData?.text?.body) {
-    return;
-  }
-
   const from = messageData.from;
-  const mensaje = messageData.text.body;
+  const messageType = getIncomingMessageType(messageData);
+  const previewText = buildIncomingMessagePreview(messageData, messageType);
   const phoneNumberId = value?.metadata?.phone_number_id;
   const cliente = getCliente(phoneNumberId);
 
-  logWebhookEvent({
-    type: "incoming",
-    phoneNumberId,
-    clientId: cliente?.id || null,
-    from,
-    messageId,
-    text: mensaje,
-  });
-
   if (!cliente) {
+    logWebhookEvent({
+      type: "incoming",
+      phoneNumberId,
+      clientId: null,
+      from,
+      messageId,
+      text: previewText,
+      messageType,
+      contactName: extractInboundContactProfile(value, from)?.profileName || null,
+    });
     console.log("Cliente no configurado para phoneNumberId:", phoneNumberId);
     return;
   }
 
   const runtimeState = getClientRuntimeState(cliente.id);
+  const contactProfile =
+    rememberContactProfile(runtimeState, extractInboundContactProfile(value, from)) ||
+    getKnownContactProfile(runtimeState, from);
+  const knownLeadSnapshot = getKnownLeadSnapshot(runtimeState, from);
   const processedMessageKey = `${cliente.id}:${messageId}`;
+
+  logWebhookEvent({
+    type: "incoming",
+    phoneNumberId,
+    clientId: cliente.id,
+    from,
+    messageId,
+    text: previewText,
+    messageType,
+    contactName: contactProfile?.profileName || null,
+  });
 
   if (runtimeState.mensajesProcesados.has(processedMessageKey)) {
     console.log("Mensaje duplicado ignorado:", messageId);
@@ -826,6 +1475,16 @@ async function processWebhookMessage(config, value, messageData) {
     throw new Error(`WhatsApp no configurado para cliente ${cliente.id}`);
   }
 
+  const incomingMessage = await buildIncomingMessageInput(messageData, openai, whatsappToken);
+  const mensaje = String(incomingMessage?.userMessage || "").trim();
+  const currentDate = new Date();
+  const pastDateReference = detectPastDateReference(mensaje, currentDate);
+
+  if (!mensaje) {
+    console.log("Mensaje entrante sin contenido procesable:", messageType);
+    return;
+  }
+
   const historial = getConversationHistory(runtimeState, from);
   const hasAssistantHistory = historial.some((item) => item.role === "assistant");
   const response = await openai.chat.completions.create({
@@ -833,7 +1492,12 @@ async function processWebhookMessage(config, value, messageData) {
     messages: [
       {
         role: "system",
-        content: buildSystemPrompt(cliente, config, { hasAssistantHistory }),
+        content: buildSystemPrompt(cliente, config, {
+          hasAssistantHistory,
+          currentDate,
+          pastDateReference,
+          knownLeadSnapshot,
+        }),
       },
       ...historial,
       { role: "user", content: mensaje },
@@ -886,16 +1550,29 @@ async function processWebhookMessage(config, value, messageData) {
   }
 
   data = enrichLeadData(cliente, mensaje, data, historial);
+  const hasPastSchedulingConflict =
+    Boolean(pastDateReference) &&
+    mentionsSchedulingIntent(mensaje, data?.mensaje, data?.interes, data?.presupuesto);
 
-  data.lead_calificado =
-    (Boolean(data.lead_calificado) && hasLeadContactData(data)) ||
-    looksLikeQualifiedLead(mensaje, data, data.mensaje || "Perfecto, contame un poco mas y te ayudo.");
+  if (hasPastSchedulingConflict) {
+    data.lead_calificado = false;
+    data.mensaje = buildPastDateReply(pastDateReference);
+  }
+
+  data.lead_calificado = hasPastSchedulingConflict
+    ? false
+    : (Boolean(data.lead_calificado) && hasLeadContactData(data)) ||
+      looksLikeQualifiedLead(mensaje, data, data.mensaje || "Perfecto, contame un poco mas y te ayudo.");
   const isFarewell = looksLikeFarewellMessage(mensaje);
-  const mensajeFinal = isFarewell
+  const rawReply = isFarewell
     ? buildFarewellReply(data)
     : data.lead_calificado
       ? buildQualifiedLeadReply(cliente, data)
       : data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
+  const mensajeFinal = sanitizeRepeatedLeadCapture(
+    normalizeAssistantTone(sanitizeAssistantReply(rawReply)),
+    knownLeadSnapshot
+  );
   const leadKey = `${cliente.id}:${from}`;
 
   historial.push({ role: "user", content: mensaje });
@@ -914,10 +1591,12 @@ async function processWebhookMessage(config, value, messageData) {
     from,
     messageId,
     text: mensajeFinal,
+    messageType,
+    contactName: contactProfile?.profileName || null,
   });
 
   if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
-    processQualifiedLead(cliente, runtimeState, leadKey, from, data).catch((error) => {
+    processQualifiedLead(cliente, runtimeState, leadKey, from, data, contactProfile).catch((error) => {
       console.error("Error procesando lead:", error.response?.data || error.message || error);
     });
   }
