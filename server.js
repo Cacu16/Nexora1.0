@@ -877,6 +877,44 @@ function hasUnsupportedOperationalClaim(message) {
   ].some((pattern) => pattern.test(normalizedMessage));
 }
 
+function buildUnsupportedMediaReply(messageType, cliente) {
+  const assistantName = cliente?.assistantName || "Fer";
+  const businessName = cliente?.businessName || cliente?.nombre || "el negocio";
+
+  if (messageType === "sticker") {
+    return `Hola, soy ${assistantName} de ${businessName}. Por aca no podemos recibir stickers. Si queres, contame por texto y te ayudo.`;
+  }
+
+  return `Hola, soy ${assistantName} de ${businessName}. Por aca no podemos recibir imagenes. Si queres, contame por texto y te ayudo.`;
+}
+
+function looksLikeGreetingOnly(message) {
+  const normalizedMessage = normalizeLeadSignalText(message).replace(/[!.,?]/g, " ").trim();
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  return [
+    "hola",
+    "holaa",
+    "holi",
+    "buenas",
+    "buen dia",
+    "buen dia fer",
+    "buenas tardes",
+    "buenas noches",
+    "que tal",
+    "ey",
+  ].includes(normalizedMessage);
+}
+
+function buildSimpleGreetingReply(cliente) {
+  const assistantName = cliente?.assistantName || "Fer";
+  const businessName = cliente?.businessName || cliente?.nombre || "el negocio";
+  return `Hola, soy ${assistantName} de ${businessName}. Contame en que te puedo ayudar.`;
+}
+
 function isRequestingKnownContactData(message, knownLeadSnapshot) {
   const normalizedMessage = normalizeLeadSignalText(message);
 
@@ -1386,44 +1424,6 @@ async function transcribeWhatsappAudioMessage(messageData, openai, whatsappToken
   return String(transcription?.text || transcription || "").trim() || null;
 }
 
-async function describeWhatsappImageMessage(messageData, openai, whatsappToken) {
-  const imageId = String(messageData?.image?.id || "").trim();
-
-  if (!imageId) {
-    return null;
-  }
-
-  const { buffer, mimeType } = await downloadWhatsappMedia(imageId, whatsappToken);
-  const imageDataUrl = buildDataUrl(buffer, mimeType || "image/jpeg");
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content:
-          "Describe brevemente la imagen para un asistente comercial en espanol. Menciona solo lo visible o legible con alta confianza y evita inventar detalles.",
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Decime en una o dos frases que se ve, si hay texto legible relevante y cualquier contexto comercial util.",
-          },
-          {
-            type: "image_url",
-            image_url: {
-              url: imageDataUrl,
-            },
-          },
-        ],
-      },
-    ],
-  });
-
-  return String(response.choices?.[0]?.message?.content || "").trim() || null;
-}
-
 async function buildIncomingMessageInput(messageData, openai, whatsappToken) {
   const messageType = getIncomingMessageType(messageData);
 
@@ -1435,27 +1435,12 @@ async function buildIncomingMessageInput(messageData, openai, whatsappToken) {
       };
     case "image": {
       const caption = String(messageData?.image?.caption || "").trim();
-      try {
-        const imageDescription = await describeWhatsappImageMessage(messageData, openai, whatsappToken);
-        return {
-          messageType,
-          userMessage: [
-            "El cliente envio una foto por WhatsApp.",
-            imageDescription ? `Descripcion visual aproximada: "${imageDescription}".` : null,
-            caption ? `Texto adjunto por el cliente: "${caption}".` : null,
-          ]
-            .filter(Boolean)
-            .join(" "),
-        };
-      } catch (error) {
-        console.error("Error describiendo imagen entrante:", error.response?.data || error.message || error);
-        return {
-          messageType,
-          userMessage: caption
-            ? `El cliente envio una foto por WhatsApp con este texto: "${caption}". No pude procesar bien la imagen, asi que responde sin inventar su contenido visual.`
-            : "El cliente envio una foto por WhatsApp. No pude procesar bien la imagen, asi que responde de forma util y, si hace falta, pedi que te cuente que necesita o que describa la foto.",
-        };
-      }
+      return {
+        messageType,
+        userMessage: caption
+          ? `El cliente envio una foto por WhatsApp con este texto: "${caption}".`
+          : "El cliente envio una foto por WhatsApp.",
+      };
     }
     case "audio":
       try {
@@ -1479,8 +1464,7 @@ async function buildIncomingMessageInput(messageData, openai, whatsappToken) {
     case "sticker":
       return {
         messageType,
-        userMessage:
-          "El cliente envio un sticker por WhatsApp. Responde natural segun el contexto y, si hace falta, invitalo a contarte en texto que necesita.",
+        userMessage: "El cliente envio un sticker por WhatsApp.",
       };
     default:
       return {
@@ -1712,6 +1696,59 @@ async function processWebhookMessage(config, value, messageData) {
 
   const historial = getConversationHistory(runtimeState, from);
   const hasAssistantHistory = historial.some((item) => item.role === "assistant");
+
+  if (messageType === "image" || messageType === "sticker") {
+    const mediaReply = buildUnsupportedMediaReply(messageType, cliente);
+
+    historial.push({ role: "user", content: mensaje });
+    historial.push({ role: "assistant", content: mediaReply });
+
+    if (historial.length > 6) {
+      runtimeState.historialPorContacto.set(from, historial.slice(-6));
+    }
+
+    await responderWhatsapp(phoneNumberId, from, mediaReply, whatsappToken);
+
+    logWebhookEvent({
+      type: "outgoing",
+      phoneNumberId,
+      clientId: cliente.id,
+      from,
+      messageId,
+      text: mediaReply,
+      messageType,
+      contactName: contactProfile?.profileName || null,
+    });
+
+    return;
+  }
+
+  if (!hasAssistantHistory && looksLikeGreetingOnly(mensaje)) {
+    const greetingReply = buildSimpleGreetingReply(cliente);
+
+    historial.push({ role: "user", content: mensaje });
+    historial.push({ role: "assistant", content: greetingReply });
+
+    if (historial.length > 6) {
+      runtimeState.historialPorContacto.set(from, historial.slice(-6));
+    }
+
+    await responderWhatsapp(phoneNumberId, from, greetingReply, whatsappToken);
+
+    logWebhookEvent({
+      type: "outgoing",
+      phoneNumberId,
+      clientId: cliente.id,
+      from,
+      messageId,
+      text: greetingReply,
+      messageType,
+      contactName: contactProfile?.profileName || null,
+    });
+
+    return;
+  }
+
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
