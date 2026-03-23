@@ -612,6 +612,33 @@ function looksLikeFarewellMessage(userMessage) {
   );
 }
 
+function looksLikePostLeadAcknowledgement(userMessage, knownLeadSnapshot) {
+  const text = normalizeLeadSignalText(userMessage).replace(/[!.,?]/g, " ").trim();
+
+  if (!text || !knownLeadSnapshot?.leadSentAt) {
+    return false;
+  }
+
+  return [
+    "genial",
+    "genial fer",
+    "perfecto",
+    "perfecto fer",
+    "buenisimo",
+    "buenisimo fer",
+    "listo",
+    "listo fer",
+    "dale",
+    "dale fer",
+    "ok",
+    "oka",
+    "joya",
+    "excelente",
+    "gracias",
+    "gracias fer",
+  ].includes(text);
+}
+
 function buildFarewellReply(parsedData) {
   const customerName = String(parsedData?.nombre || "").trim();
   const greetingTarget = customerName ? ` ${customerName}` : "";
@@ -620,7 +647,9 @@ function buildFarewellReply(parsedData) {
 }
 
 function buildQualifiedLeadReply(cliente, parsedData, options = {}) {
-  const customerName = String(parsedData?.nombre || "").trim();
+  const customerName = String(
+    parsedData?.nombre || options?.knownLeadSnapshot?.confirmedName || ""
+  ).trim();
   const greetingTarget = customerName ? ` ${customerName}` : "";
   const interes = String(parsedData?.interes || "").trim();
   const orderTail = interes ? ` y tu pedido de ${interes}` : " y tu pedido";
@@ -877,15 +906,12 @@ function hasUnsupportedOperationalClaim(message) {
   ].some((pattern) => pattern.test(normalizedMessage));
 }
 
-function buildUnsupportedMediaReply(messageType, cliente) {
-  const assistantName = cliente?.assistantName || "Fer";
-  const businessName = cliente?.businessName || cliente?.nombre || "el negocio";
-
+function buildUnsupportedMediaReply(messageType) {
   if (messageType === "sticker") {
-    return `Hola, soy ${assistantName} de ${businessName}. Por aca no podemos recibir stickers. Si queres, contame por texto y te ayudo.`;
+    return "Por aca no podemos recibir stickers. Si queres, contame por texto y te ayudo.";
   }
 
-  return `Hola, soy ${assistantName} de ${businessName}. Por aca no podemos recibir imagenes. Si queres, contame por texto y te ayudo.`;
+  return "Por aca no podemos recibir imagenes. Si queres, contame por texto y te ayudo.";
 }
 
 function looksLikeGreetingOnly(message) {
@@ -912,7 +938,43 @@ function looksLikeGreetingOnly(message) {
 function buildSimpleGreetingReply(cliente) {
   const assistantName = cliente?.assistantName || "Fer";
   const businessName = cliente?.businessName || cliente?.nombre || "el negocio";
-  return `Hola, soy ${assistantName} de ${businessName}. Contame en que te puedo ayudar.`;
+  return `Hola, soy ${assistantName} de ${businessName}. Como te puedo ayudar?`;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatPlanReply(message, cliente) {
+  const trimmedMessage = String(message || "").trim();
+
+  if (!trimmedMessage || !Array.isArray(cliente?.planes) || cliente.planes.length < 2) {
+    return trimmedMessage;
+  }
+
+  const normalizedMessage = normalizeLeadSignalText(trimmedMessage);
+  const mentionedPlanNames = cliente.planes
+    .map((plan) => String(plan?.nombre || "").trim())
+    .filter((planName) => planName && normalizedMessage.includes(normalizeLeadSignalText(planName)));
+
+  if (mentionedPlanNames.length < 2) {
+    return trimmedMessage;
+  }
+
+  let formattedMessage = trimmedMessage;
+
+  for (const planName of mentionedPlanNames) {
+    const planPattern = new RegExp(`\\s*${escapeRegExp(planName)}\\s*:`, "gi");
+    formattedMessage = formattedMessage.replace(planPattern, `\n\n${planName}:`);
+  }
+
+  formattedMessage = formattedMessage
+    .replace(/\s+(Setup:|Mensual:|Precio setup:|Precio mensual:)/gi, "\n$1")
+    .replace(/\s+-\s+/g, "\n- ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return formattedMessage;
 }
 
 function isRequestingKnownContactData(message, knownLeadSnapshot) {
@@ -1475,14 +1537,24 @@ async function buildIncomingMessageInput(messageData, openai, whatsappToken) {
   }
 }
 
-async function processQualifiedLead(cliente, runtimeState, leadKey, from, data, contactProfile = null) {
+async function processQualifiedLead(
+  cliente,
+  runtimeState,
+  leadKey,
+  from,
+  data,
+  contactProfile = null,
+  knownLeadSnapshot = null
+) {
   runtimeState.leadsEnviados.add(leadKey);
   const leadEmail = cliente.leadEmail || DEFAULT_LEAD_EMAIL;
-  const resolvedPhone = String(data.telefono || from || "").trim() || "No informado";
+  const resolvedName = String(data.nombre || knownLeadSnapshot?.confirmedName || "").trim() || "No informado";
+  const resolvedPhone =
+    String(data.telefono || knownLeadSnapshot?.confirmedPhone || from || "").trim() || "No informado";
   const contactName = String(contactProfile?.profileName || "").trim() || null;
   updateKnownContactState(runtimeState, from, {
     profileName: contactName,
-    confirmedName: data.nombre || null,
+    confirmedName: resolvedName !== "No informado" ? resolvedName : null,
     confirmedPhone: resolvedPhone,
     leadInterest: data.interes || null,
     leadSentAt: new Date().toISOString(),
@@ -1494,7 +1566,7 @@ async function processQualifiedLead(cliente, runtimeState, leadKey, from, data, 
     toEmail: leadEmail,
     from,
     contactName,
-    nombre: data.nombre || "No informado",
+    nombre: resolvedName,
     telefono: resolvedPhone,
     whatsappOrigen: from || "No informado",
     interes: data.interes || "Interesado",
@@ -1502,7 +1574,7 @@ async function processQualifiedLead(cliente, runtimeState, leadKey, from, data, 
   });
 
   await guardarLead(
-    data.nombre || "No informado",
+    resolvedName,
     resolvedPhone,
     cliente.nombre || "Pendiente",
     data.interes || "Interesado"
@@ -1511,7 +1583,7 @@ async function processQualifiedLead(cliente, runtimeState, leadKey, from, data, 
   await enviarEmailLead(
     cliente,
     leadEmail,
-    data.nombre || "No informado",
+    resolvedName,
     resolvedPhone,
     data.interes || "Interesado",
     data.presupuesto || "No informado",
@@ -1698,7 +1770,7 @@ async function processWebhookMessage(config, value, messageData) {
   const hasAssistantHistory = historial.some((item) => item.role === "assistant");
 
   if (messageType === "image" || messageType === "sticker") {
-    const mediaReply = buildUnsupportedMediaReply(messageType, cliente);
+    const mediaReply = buildUnsupportedMediaReply(messageType);
 
     historial.push({ role: "user", content: mensaje });
     historial.push({ role: "assistant", content: mediaReply });
@@ -1811,7 +1883,7 @@ async function processWebhookMessage(config, value, messageData) {
     }
   }
 
-  data = mergeKnownLeadSnapshot(enrichLeadData(cliente, mensaje, data, historial), knownLeadSnapshot);
+  data = enrichLeadData(cliente, mensaje, data, historial);
   const meetingRequested = mentionsMeetingIntent(mensaje, data?.mensaje, data?.interes);
   const meetingLabel = inferMeetingLabel(mensaje, data?.interes, data?.mensaje);
   const hasMeetingContactReady =
@@ -1871,14 +1943,21 @@ async function processWebhookMessage(config, value, messageData) {
   if (!hasPastSchedulingConflict && hasMeetingContactReady) {
     data.lead_calificado = true;
   }
+  const isPostLeadAcknowledgement = looksLikePostLeadAcknowledgement(mensaje, knownLeadSnapshot);
+
+  if (isPostLeadAcknowledgement) {
+    data.lead_calificado = false;
+    data.mensaje = "Perfecto, en breve te contactan para seguir.";
+  }
+
   const isFarewell = looksLikeFarewellMessage(mensaje);
   const rawReply = isFarewell
     ? buildFarewellReply(data)
     : data.lead_calificado
-      ? buildQualifiedLeadReply(cliente, data, { meetingRequested, meetingLabel })
+      ? buildQualifiedLeadReply(cliente, data, { knownLeadSnapshot, meetingRequested, meetingLabel })
       : data.mensaje || "Perfecto, contame un poco mas y te ayudo.";
   const mensajeFinal = sanitizeRepeatedLeadCapture(
-    normalizeAssistantTone(sanitizeAssistantReply(rawReply)),
+    formatPlanReply(normalizeAssistantTone(sanitizeAssistantReply(rawReply)), cliente),
     knownLeadSnapshot
   );
   const leadKey = buildLeadDispatchKey(cliente.id, from, data?.interes);
@@ -1904,9 +1983,11 @@ async function processWebhookMessage(config, value, messageData) {
   });
 
   if (data.lead_calificado && !runtimeState.leadsEnviados.has(leadKey)) {
-    processQualifiedLead(cliente, runtimeState, leadKey, from, data, contactProfile).catch((error) => {
-      console.error("Error procesando lead:", error.response?.data || error.message || error);
-    });
+    processQualifiedLead(cliente, runtimeState, leadKey, from, data, contactProfile, knownLeadSnapshot).catch(
+      (error) => {
+        console.error("Error procesando lead:", error.response?.data || error.message || error);
+      }
+    );
   }
 }
 
