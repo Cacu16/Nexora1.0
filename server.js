@@ -994,6 +994,15 @@ function looksLikeGreetingOnly(message) {
 }
 
 function buildSimpleGreetingReply(cliente) {
+  const normalizedBusinessName = normalizeLeadSignalText(
+    cliente?.businessName || cliente?.nombre || ""
+  );
+  const configuredGreeting = String(cliente?.greeting || "").trim();
+
+  if (normalizedBusinessName === "nexora" && configuredGreeting) {
+    return configuredGreeting;
+  }
+
   const assistantName = cliente?.assistantName || "Fer";
   const businessName = cliente?.businessName || cliente?.nombre || "el negocio";
   return `Hola, soy ${assistantName} de ${businessName}. Como te puedo ayudar?`;
