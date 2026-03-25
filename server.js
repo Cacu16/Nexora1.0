@@ -485,8 +485,9 @@ function shouldReplaceLeadInterest(interes) {
     return true;
   }
 
-  return [
+  const genericInterestValues = [
     "interesado",
+    "interezado",
     "consulta",
     "compra",
     "pedido",
@@ -495,7 +496,19 @@ function shouldReplaceLeadInterest(interes) {
     "plan",
     "vino",
     "automatizacion",
-  ].includes(normalized);
+  ];
+
+  if (genericInterestValues.includes(normalized)) {
+    return true;
+  }
+
+  return [
+    /intere[sz]ado/,
+    /\bplan(es)?\b/,
+    /\bautomatizacion\b/,
+    /\bservicio\b/,
+    /\bconsulta\b/,
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function enrichLeadData(cliente, userMessage, parsedData, history = []) {
